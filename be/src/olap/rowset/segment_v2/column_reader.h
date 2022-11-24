@@ -93,7 +93,7 @@ public:
                          std::unique_ptr<ColumnReader>* reader);
 
     ~ColumnReader();
-
+    const OrdinalIndexPB* ordinal_index_meta();
     // create a new column iterator. Client should delete returned iterator
     Status new_iterator(ColumnIterator** iterator);
     // Client should delete returned iterator
@@ -299,9 +299,13 @@ public:
 
     bool is_nullable() { return _reader->is_nullable(); }
 
+    Status load_next_page(bool* eos);
+
+    Status read_data_page(const OrdinalPageIndexIterator& iter);
+
 private:
     void _seek_to_pos_in_page(ParsedPage* page, ordinal_t offset_in_page) const;
-    Status _load_next_page(bool* eos);
+
     Status _read_data_page(const OrdinalPageIndexIterator& iter);
 
 private:

@@ -291,6 +291,11 @@ Status ColumnReader::get_row_ranges_by_bloom_filter(CondColumn* cond_column,
     return Status::OK();
 }
 
+const OrdinalIndexPB* ColumnReader::ordinal_index_meta()
+{
+    return _ordinal_index_meta;
+}
+
 Status ColumnReader::_load_ordinal_index(bool use_page_cache, bool kept_in_memory) {
     DCHECK(_ordinal_index_meta != nullptr);
     _ordinal_index.reset(new OrdinalIndexReader(_path_desc, _ordinal_index_meta, _num_rows));
@@ -527,7 +532,7 @@ Status FileColumnIterator::next_batch(size_t* n, ColumnBlockView* dst, bool* has
     while (remaining > 0) {
         if (!_page.has_remaining()) {
             bool eos = false;
-            RETURN_IF_ERROR(_load_next_page(&eos));
+            RETURN_IF_ERROR(load_next_page(&eos));
             if (eos) {
                 break;
             }
@@ -591,7 +596,7 @@ Status FileColumnIterator::next_batch(size_t* n, vectorized::MutableColumnPtr &d
     while (remaining > 0) {
         if (!_page.has_remaining()) {
             bool eos = false;
-            RETURN_IF_ERROR(_load_next_page(&eos));
+            RETURN_IF_ERROR(load_next_page(&eos));
             if (eos) {
                 break;
             }
@@ -715,7 +720,7 @@ Status FileColumnIterator::read_by_rowids(const rowid_t* rowids, const size_t co
     return Status::OK();
 }
 
-Status FileColumnIterator::_load_next_page(bool* eos) {
+Status FileColumnIterator::load_next_page(bool* eos) {
     _page_iter.next();
     if (!_page_iter.valid()) {
         *eos = true;
@@ -726,6 +731,11 @@ Status FileColumnIterator::_load_next_page(bool* eos) {
     _seek_to_pos_in_page(&_page, 0);
     *eos = false;
     return Status::OK();
+}
+
+Status FileColumnIterator::read_data_page(const OrdinalPageIndexIterator& iter) {
+    _read_data_page(iter);
+
 }
 
 Status FileColumnIterator::_read_data_page(const OrdinalPageIndexIterator& iter) {

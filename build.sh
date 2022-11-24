@@ -171,7 +171,7 @@ else
             *) echo "Internal error" ; exit 1 ;;
         esac
     done
-    #only ./build.sh -j xx then build all 
+    #only ./build.sh -j xx then build all
     if [[ ${PARAMETER_COUNT} -eq 3 ]] && [[ ${PARAMETER_FLAG} -eq 1 ]];then
         BUILD_BE=1
         BUILD_FE=1
@@ -280,7 +280,7 @@ if [ ${BUILD_BE} -eq 1 ] ; then
             -DCMAKE_MAKE_PROGRAM="${MAKE_PROGRAM}" \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
-            -DMAKE_TEST=OFF \
+            -DMAKE_TEST=ON \
             ${CMAKE_USE_CCACHE} \
             -DWITH_MYSQL=${WITH_MYSQL} \
             -DWITH_LZO=${WITH_LZO} \

@@ -43,6 +43,14 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 #include "util/file_utils.h"
+#include "olap/rowset/segment_v2/page_io.h"
+#include "olap/olap_common.h"
+#include "olap/fs/block_manager.h"
+#include "olap/short_key_index.h"
+#include "olap/rowset/segment_v2/ordinal_page_index.h"
+#include "common/config.h"
+#include "olap/options.h"
+#include "olap/storage_engine.h"
 
 using std::filesystem::path;
 using doris::DataDir;
@@ -64,6 +72,8 @@ using doris::segment_v2::PagePointer;
 using doris::segment_v2::ColumnReaderOptions;
 using doris::segment_v2::ColumnIteratorOptions;
 using doris::segment_v2::PageFooterPB;
+
+using namespace doris;
 
 const std::string HEADER_PREFIX = "tabletmeta_";
 
@@ -330,6 +340,262 @@ void show_segment_footer(const std::string& file_name) {
     return;
 }
 
+StorageEngine* k_engine = nullptr;
+
+void SetUp() {
+    config::tablet_map_shard_size = 1;
+    config::txn_map_shard_size = 1;
+    config::txn_shard_size = 1;
+    config::default_rowset_type = "BETA";
+    config::disable_storage_page_cache = true;
+
+    char buffer[128];
+    ignore_result(getcwd(buffer, 128));
+    config::storage_root_path = std::string(buffer) + "/data_test";
+
+    FileUtils::remove_all(config::storage_root_path).ok();
+    FileUtils::create_dir(config::storage_root_path).ok();
+
+    std::vector<StorePath> paths;
+    paths.emplace_back(config::storage_root_path, -1);
+
+    doris::EngineOptions options;
+    options.store_paths = paths;
+    Status s = doris::StorageEngine::open(options, &k_engine);
+    (void)s;
+    ExecEnv* exec_env = doris::ExecEnv::GetInstance();
+    exec_env->set_storage_engine(k_engine);
+
+    const std::string rowset_dir = "./data_test/data/beta_rowset_test";
+
+}
+
+void check_data(const std::string& file_name) {
+    SetUp();
+    FilePathDesc path_desc(file_name);
+    std::unique_ptr<RandomAccessFile> input_file;
+    Status status = doris::Env::Default()->new_random_access_file(file_name, &input_file);
+    if (!status.ok()) {
+        std::cout << "open file failed: " << status.to_string() << std::endl;
+        return;
+    }
+
+    // get footer
+    SegmentFooterPB* footer = new SegmentFooterPB();
+    status = get_segment_footer(input_file.get(), footer);
+    if (!status.ok()) {
+        std::cout << "get footer failed: " << status.to_string() << std::endl;
+        return;
+    }
+
+    size_t column_num = footer->columns_size();
+    for (int i = 0; i < column_num; ++i) {
+        std::cout << "begin of a column" << std::endl;
+        const ColumnMetaPB& column_meta = footer->columns(i);
+
+        std::string json_footer;
+        json2pb::Pb2JsonOptions json_options;
+        json_options.pretty_json = true;
+        bool ret = json2pb::ProtoMessageToJson(column_meta, &json_footer, json_options);
+        if (!ret) {
+            std::cout << "Convert PB to json failed" << std::endl;
+            return;
+        }
+        std::cout << json_footer << std::endl;
+
+        size_t num_rows = column_meta.num_rows();
+        std::unique_ptr<ColumnReader> reader;
+        ColumnReaderOptions opts;
+        ColumnReader::create(opts, column_meta, num_rows, path_desc, &reader);
+
+        OrdinalPageIndexIterator ordinal_page_index_itr;
+        reader->seek_to_first(&ordinal_page_index_itr);
+
+        while (ordinal_page_index_itr.valid()) {
+            const PagePointer& pp = ordinal_page_index_itr.page();
+            std::cout << "begin of a page" << std::endl;
+
+
+            uint8_t* fixed_buf = (uint8_t*)malloc(pp.size);
+            Slice slice(fixed_buf, pp.size);
+            input_file->read_at(pp.offset, &slice);
+
+            uint32_t footer_length = decode_fixed32_le((uint8_t*)slice.data + slice.size - 8);
+            //uint8_t* pgft = fixed_buf + pp.size - footer_length;
+            std::cout << pp.offset << "," << pp.size << "," << footer_length << std::endl;
+            {
+                PageFooterPB pagefooter;
+
+                std::string footer_buf;
+                footer_buf.resize(footer_length);
+                Slice slice2(footer_buf);
+                input_file->read_at(pp.offset + pp.size - footer_length - 8, &slice2);
+
+                // deserialize footer PB
+                if (!pagefooter.ParseFromString(footer_buf)) {
+                    std::cout <<"parse failed" << std::endl;
+                }
+
+                std::string json_footer;
+                json2pb::Pb2JsonOptions json_options;
+                json_options.pretty_json = true;
+                bool ret = json2pb::ProtoMessageToJson(pagefooter, &json_footer, json_options);
+                if (!ret) {
+                    std::cout << "Convert PB to json failed" << std::endl;
+                    return;
+                }
+                std::cout << json_footer << std::endl;
+            }
+
+            // TODO: try to decompress the page to check length, or even try to decode the page
+
+            std::cout << "end of a page" << std::endl;
+
+            ordinal_page_index_itr.next();
+        }
+#if 0
+        const OrdinalIndexPB* pgpb = reader->ordinal_index_meta();
+
+        if (!pgpb) {
+            continue;
+        }
+        PagePointer pp(pgpb->root_page().root_page().offset(), pgpb->root_page().root_page().size());
+#endif
+        //FileColumnIterator file_column_itr(reader.get());
+#if 0
+        ColumnIteratorOptions iter_opts;
+        iter_opts.stats = nullptr;
+        iter_opts.use_page_cache = false;
+        std::unique_ptr<fs::ReadableBlock> rblock;
+        config::disable_storage_page_cache = true;
+
+        fs::BlockManager* block_mgr = fs::fs_util::block_manager(TStorageMedium::HDD);
+        block_mgr->open_block(path_desc, &rblock);
+        iter_opts.rblock = rblock.get();
+
+        // file_column_itr.init(iter_opts);
+
+        std::unique_ptr<BlockCompressionCodec> codec;
+        get_block_compression_codec(reader->get_compression(), codec);
+
+
+        PageHandle handle;
+        Slice page_body;
+        PageFooterPB page_footer;
+        reader->read_page(iter_opts, pp, &handle, &page_body, &page_footer, codec.get());
+#endif
+#if 0
+        OrdinalPageIndexIterator zdata;
+        file_column_itr.read_data_page(zdata);
+
+        bool is_eos = false;
+        while (file_column_itr.load_next_page(&is_eos)) {
+            std::cout << "    load one page" << std::endl;
+        }
+#endif
+        std::cout << "end of a column" << std::endl;
+    }
+
+
+#if 0
+    size_t column_num = footer.columns_size();
+    for (int i = 0; i < column_num; ++i) {
+        // step1. get OrdinalIndex for each column
+        ColumnMetaPB column_meta = footer.columns(i);
+        size_t row_num = column_meta.num_rows();
+        size_t index_num = column_meta.indexes_size();
+        std::cout << "index number:" << index_num << std::endl;
+        for (int j = 0; j < index_num; ++j) {
+            OrdinalIndexPB ordinal_index = column_meta.indexes(j).ordinal_index();
+            // step2. parse OrdinalIndex to get data pages
+            OrdinalIndexReader reader(path_desc, &ordinal_index, row_num);
+            reader.load(false, false);
+            for (auto itr = reader.begin(); itr.valid(); itr.next()) {
+                // step3. check each data page
+                auto pg = itr.page();
+
+#if 0
+                // 3.1 decompress and load to memory
+                PageReadOptions opts;
+                opts.rblock = iter_opts.rblock;
+                opts.page_pointer = pp;
+                opts.codec = codec;
+                opts.stats = iter_opts.stats;
+                opts.verify_checksum = _opts.verify_checksum;
+                opts.use_page_cache = iter_opts.use_page_cache;
+                opts.kept_in_memory = _opts.kept_in_memory;
+                opts.type = iter_opts.type;
+                opts.encoding_info = _encoding_info;
+
+                PageIO::read_and_decompress_page(opts, handle, page_body, footer);
+                // 3.2 parse pagefooter to form parsed page
+                // 3.3 decode
+#endif
+
+            }
+        }
+    }
+#endif
+
+#if 0
+    // get short key index page
+    auto sk_index_page = footer.short_key_index_page();
+    uint64_t sk_index_page_offset = sk_index_page.offset();
+    uint32_t sk_index_page_size = sk_index_page.size();
+
+    // load short key index from page
+
+    uint8_t fixed_buf[sk_index_page_size];
+    Slice slice(fixed_buf, sk_index_page_size);
+    input_file->read_at(sk_index_page_offset, &slice);
+#endif
+
+#if 0
+    FilePathDesc path_desc(file_name);
+    std::unique_ptr<fs::ReadableBlock> rblock;
+    fs::BlockManager* block_mgr = fs::fs_util::block_manager(TStorageMedium::SSD);
+    block_mgr->open_block(path_desc, &rblock);
+    OlapReaderStatistics tmp_stats;
+
+    PageReadOptions opts;
+    opts.use_page_cache = false;
+    opts.rblock = rblock.get();
+    opts.page_pointer = PagePointer(footer.short_key_index_page());
+    opts.codec = nullptr; // short key index page uses NO_COMPRESSION for now
+    opts.stats = &tmp_stats;
+    opts.type = INDEX_PAGE;
+
+    PageHandle sk_index_handle;
+
+    Slice body;
+    PageFooterPB page_footer;
+    PageIO::read_and_decompress_page(opts, &sk_index_handle, &body, &page_footer);
+    DCHECK_EQ(page_footer.type(), SHORT_KEY_PAGE);
+    DCHECK(page_footer.has_short_key_page_footer());
+
+    auto decoder = new ShortKeyIndexDecoder();
+    decoder->parse(body, page_footer.short_key_page_footer());
+
+    std::cout << "short key index num:" << decoder->num_items() << std::endl;
+    for (auto itr = decoder->begin(); itr != decoder->end(); ++itr) {
+        auto a = *itr;
+    }
+#endif
+
+#if 0
+    std::string json_footer;
+    json2pb::Pb2JsonOptions json_options;
+    json_options.pretty_json = true;
+    bool ret = json2pb::ProtoMessageToJson(footer, &json_footer, json_options);
+    if (!ret) {
+        std::cout << "Convert PB to json failed" << std::endl;
+        return;
+    }
+    std::cout << json_footer << std::endl;
+#endif
+    return;
+}
+
 int main(int argc, char** argv) {
     std::string usage = get_usage(argv[0]);
     gflags::SetUsageMessage(usage);
@@ -349,10 +615,16 @@ int main(int argc, char** argv) {
         batch_delete_meta(tablet_file);
     } else if (FLAGS_operation == "show_segment_footer") {
         if (FLAGS_file == "") {
-            std::cout << "no file flag for show dict" << std::endl;
+            std::cout << "no file flag for show_segment_footer" << std::endl;
             return -1;
         }
         show_segment_footer(FLAGS_file);
+    } else if (FLAGS_operation == "check_data") {
+        if (FLAGS_file == "") {
+            std::cout << "no file flag for check_data" << std::endl;
+            return -1;
+        }
+        check_data(FLAGS_file);
     } else {
         // operations that need root path should be written here
         std::set<std::string> valid_operations = {"get_meta", "load_meta", "delete_meta"};
