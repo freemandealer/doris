@@ -244,7 +244,10 @@ private:
 
     struct MergeContextComparator {
         MergeContextComparator(int idx, bool is_unique)
-                : _sequence_id_idx(idx), _is_unique(is_unique) {};
+                : _sequence_id_idx(idx), _is_unique(is_unique) {
+                                                 LOG(WARNING) << "OOXXOO is_unique:" << is_unique;
+                                                 LOG(WARNING) << boost::stacktrace::stacktrace();
+                                         };
 
         bool operator()(const MergeIteratorContext* lhs, const MergeIteratorContext* rhs) const {
             auto lhs_row = lhs->current_row();

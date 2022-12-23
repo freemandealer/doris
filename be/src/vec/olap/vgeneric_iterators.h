@@ -162,7 +162,10 @@ public:
               _sequence_id_idx(sequence_id_idx),
               _is_unique(is_unique),
               _is_reverse(is_reverse),
-              _merged_rows(merged_rows) {}
+              _merged_rows(merged_rows) {
+        LOG(WARNING) << "OOXXOO is_unique:" << is_unique;
+        LOG(WARNING) << boost::stacktrace::stacktrace();
+    }
 
     ~VMergeIterator() override {
         while (!_merge_heap.empty()) {

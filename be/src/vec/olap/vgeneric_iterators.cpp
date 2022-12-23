@@ -408,6 +408,7 @@ Status VUnionIterator::current_block_row_locations(std::vector<RowLocation>* loc
 RowwiseIterator* new_merge_iterator(std::vector<RowwiseIterator*>& inputs, int sequence_id_idx,
                                     bool is_unique, bool is_reverse, uint64_t* merged_rows) {
     if (inputs.size() == 1) {
+        LOG(WARNING) << "OOXXOO no wait only one segment!";
         return *(inputs.begin());
     }
     return new VMergeIterator(inputs, sequence_id_idx, is_unique, is_reverse, merged_rows);

@@ -96,6 +96,7 @@ Status BetaRowsetWriter::init(const RowsetWriterContext& rowset_writer_context) 
     _rowset_meta->set_rowset_type(_context.rowset_type);
     _rowset_meta->set_rowset_state(_context.rowset_state);
     _rowset_meta->set_segments_overlap(_context.segments_overlap);
+    LOG(WARNING) << "OOXXXX" << _context.segments_overlap;
     if (_context.rowset_state == PREPARED || _context.rowset_state == COMMITTED) {
         _is_pending = true;
         _rowset_meta->set_txn_id(_context.txn_id);
@@ -144,7 +145,7 @@ vectorized::VMergeIterator* BetaRowsetWriter::_get_segcompaction_reader(
         iterators.push_back(owned_it.release());
     }
     bool is_unique = (_context.tablet_schema->keys_type() == UNIQUE_KEYS);
-    bool is_reverse = false;
+    bool is_reverse = (_context.tablet_schema->keys_type() == UNIQUE_KEYS);
     auto merge_itr =
             vectorized::new_merge_iterator(iterators, -1, is_unique, is_reverse, merged_row_stat);
     DCHECK(merge_itr);
@@ -847,7 +848,10 @@ void BetaRowsetWriter::_build_rowset_meta(std::shared_ptr<RowsetMeta> rowset_met
         segments_encoded_key_bounds.push_back(*itr);
     }
     if (!_is_segment_overlapping(segments_encoded_key_bounds)) {
+        LOG(WARNING) << "OOXXXX" << "NONOVERLAPPING";
         rowset_meta->set_segments_overlap(NONOVERLAPPING);
+    } else {
+        LOG(WARNING) << "OOXXXX" << "OVERLAPPING";
     }
 
     rowset_meta->set_num_segments(num_seg);

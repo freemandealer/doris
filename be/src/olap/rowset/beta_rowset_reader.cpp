@@ -199,17 +199,30 @@ Status BetaRowsetReader::init(RowsetReaderContext* read_context) {
     // merge or union segment iterator
     RowwiseIterator* final_iterator;
     if (config::enable_storage_vectorization && read_context->is_vec) {
+        LOG(WARNING) << "tabletid:" << _rowset->rowset_meta()->tablet_id()
+                     << "txnid:" <<  _rowset->rowset_meta()->txn_id()
+                     << "rowsetid:" << _rowset->rowset_meta()->rowset_id()
+                     << "load_id:" <<  _rowset->rowset_meta()->load_id()
+                     << "start_version:" << _rowset->rowset_meta()->start_version()
+                     << "end version:" << _rowset->rowset_meta()->end_version();
+        LOG(WARNING) << boost::stacktrace::stacktrace();
         if (read_context->need_ordered_result &&
             _rowset->rowset_meta()->is_segments_overlapping()) {
+            LOG(WARNING) << "OOXXXX" << "need order && segment overlap";
+
             final_iterator = vectorized::new_merge_iterator(
                     iterators, read_context->sequence_id_idx, read_context->is_unique,
                     read_context->read_orderby_key_reverse, read_context->merged_rows);
         } else {
+            LOG(WARNING) << "OOXXXX" << "no need order or segment non-overlap";
             if (read_context->read_orderby_key_reverse) {
                 // reverse iterators to read backward for ORDER BY key DESC
                 std::reverse(iterators.begin(), iterators.end());
             }
             final_iterator = vectorized::new_union_iterator(iterators);
+            //final_iterator = vectorized::new_merge_iterator(
+            //        iterators, read_context->sequence_id_idx, read_context->is_unique,
+            //        read_context->read_orderby_key_reverse, read_context->merged_rows);
         }
     } else {
         if (read_context->need_ordered_result &&
