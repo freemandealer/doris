@@ -122,6 +122,16 @@ Status BetaRowsetWriter::add_block(const vectorized::Block* block) {
     return _add_block(block, &_segment_writer);
 }
 
+#if 0
+std::shared_ptr<BlockReader> _tablet_reader; BetaROwsetWriter::_get_segcompaction_reader(SegCompactionCandidatesSharedPtr segments) {
+    auto reader = std::make_unique<BlockReader>();
+
+    // init BlockReader with segments
+
+    return reader;
+}
+#endif
+
 vectorized::VMergeIterator* BetaRowsetWriter::_get_segcompaction_reader(
         SegCompactionCandidatesSharedPtr segments, std::shared_ptr<Schema> schema,
         OlapReaderStatistics* stat, uint64_t* merged_row_stat) {
@@ -129,6 +139,7 @@ vectorized::VMergeIterator* BetaRowsetWriter::_get_segcompaction_reader(
     read_options.stats = stat;
     read_options.use_page_cache = false;
     read_options.tablet_schema = _context.tablet_schema;
+    read_options.debug_info();
     std::vector<std::unique_ptr<RowwiseIterator>> seg_iterators;
     for (auto& seg_ptr : *segments) {
         std::unique_ptr<RowwiseIterator> iter;
@@ -145,7 +156,7 @@ vectorized::VMergeIterator* BetaRowsetWriter::_get_segcompaction_reader(
         iterators.push_back(owned_it.release());
     }
     bool is_unique = (_context.tablet_schema->keys_type() == UNIQUE_KEYS);
-    bool is_reverse = (_context.tablet_schema->keys_type() == UNIQUE_KEYS);
+    bool is_reverse = false;// (_context.tablet_schema->keys_type() == UNIQUE_KEYS);
     auto merge_itr =
             vectorized::new_merge_iterator(iterators, -1, is_unique, is_reverse, merged_row_stat);
     DCHECK(merge_itr);
@@ -285,8 +296,9 @@ Status BetaRowsetWriter::_do_compact_segments(SegCompactionCandidatesSharedPtr s
     uint64_t end = (*(segments->end() - 1))->id();
     uint64_t begin_time = GetCurrentTimeMicros();
 
-    auto schema = std::make_shared<Schema>(_context.tablet_schema->columns(),
-                                           _context.tablet_schema->columns().size());
+    // auto schema = std::make_shared<Schema>(_context.tablet_schema->columns(),
+    //_context.tablet_schema->columns().size());
+    auto schema = std::make_shared<Schema>(_context.tablet_schema);
     std::unique_ptr<OlapReaderStatistics> stat(new OlapReaderStatistics());
     uint64_t merged_row_stat = 0;
     vectorized::VMergeIterator* reader =

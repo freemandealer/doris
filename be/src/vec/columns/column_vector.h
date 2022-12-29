@@ -50,6 +50,7 @@ struct CompareHelper {
       * Essentially: nan_direction_hint == -1 says that the comparison is for sorting in descending order.
       */
     static int compare(T a, T b, int /*nan_direction_hint*/) {
+        // LOG(WARNING) << a << " vs " << b;
         return a > b ? 1 : (a < b ? -1 : 0);
     }
 };

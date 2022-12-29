@@ -167,6 +167,7 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
             _rowset, &_segment_cache_handle,
             read_context->reader_type == ReaderType::READER_QUERY));
 
+    _read_options.debug_info();
     // create iterator for each segment
     std::vector<std::unique_ptr<RowwiseIterator>> seg_iterators;
     for (auto& seg_ptr : _segment_cache_handle.get_segments()) {
@@ -230,7 +231,9 @@ Status BetaRowsetReader::init(RowsetReaderContext* read_context) {
             final_iterator = new_merge_iterator(iterators, read_context->sequence_id_idx,
                                                 read_context->is_unique, read_context->merged_rows);
         } else {
-            final_iterator = new_union_iterator(iterators);
+            // final_iterator = new_union_iterator(iterators);
+            final_iterator = new_merge_iterator(iterators, read_context->sequence_id_idx,
+                                                read_context->is_unique, read_context->merged_rows);
         }
     }
 

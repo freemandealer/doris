@@ -110,6 +110,7 @@ bool VMergeIteratorContext::compare(const VMergeIteratorContext& rhs) const {
                           : _block->compare_at(_index_in_block, rhs._index_in_block,
                                                _num_key_columns, *rhs._block, -1);
 
+
     if (cmp_res != 0) {
         return UNLIKELY(_is_reverse) ? cmp_res < 0 : cmp_res > 0;
     }
@@ -119,11 +120,18 @@ bool VMergeIteratorContext::compare(const VMergeIteratorContext& rhs) const {
         col_cmp_res = _block->compare_column_at(_index_in_block, rhs._index_in_block,
                                                 _sequence_id_idx, *rhs._block, -1);
     }
-    auto result = col_cmp_res == 0 ? data_id() < rhs.data_id() : col_cmp_res < 0;
+    bool result = false;
+    if (col_cmp_res == 0) {
+        CHECK_NE(data_id(), rhs.data_id());
+        result = data_id() < rhs.data_id();
+    } else {
+        result = col_cmp_res < 0;
+    }
 
     if (_is_unique) {
         result ? set_skip(true) : rhs.set_skip(true);
     }
+    result ? set_same(true) : rhs.set_same(true);
     return result;
 }
 
@@ -148,6 +156,8 @@ void VMergeIteratorContext::copy_rows(Block* block, bool advanced) {
 
         d_cp->assume_mutable()->insert_range_from(*s_cp, start, _cur_batch_num);
     }
+    auto tmp_pre_ctx_same_bit = get_pre_ctx_same();
+    dst.set_same_bit(tmp_pre_ctx_same_bit.begin(), tmp_pre_ctx_same_bit.begin() + _cur_batch_num);
     _cur_batch_num = 0;
 }
 
@@ -158,8 +168,9 @@ void VMergeIteratorContext::copy_rows(BlockView* view, bool advanced) {
     size_t start = _index_in_block - _cur_batch_num + 1 - advanced;
     DCHECK(start >= 0);
 
+    auto tmp_pre_ctx_same_bit = get_pre_ctx_same();
     for (size_t i = 0; i < _cur_batch_num; ++i) {
-        view->push_back({_block, static_cast<int>(start + i), false});
+        view->push_back({_block, static_cast<int>(start + i), tmp_pre_ctx_same_bit[i]});
     }
 
     _cur_batch_num = 0;
@@ -255,11 +266,14 @@ Status VMergeIteratorContext::init(const StorageReadOptions& opts) {
     if (valid()) {
         RETURN_IF_ERROR(advance());
     }
+    _pre_ctx_same_bit.reserve(_block_row_max);
+    _pre_ctx_same_bit.assign(_block_row_max, false);
     return Status::OK();
 }
 
 Status VMergeIteratorContext::advance() {
     _skip = false;
+    _same = false;
     // NOTE: we increase _index_in_block directly to valid one check
     do {
         _index_in_block++;
@@ -314,7 +328,8 @@ Status VMergeIterator::init(const StorageReadOptions& opts) {
     }
     _schema = &(*_origin_iters.begin())->schema();
     _record_rowids = opts.record_rowids;
-
+    LOG(WARNING) << "OOXXOOis_reverse" << _is_reverse;
+    opts.debug_info();
     for (auto iter : _origin_iters) {
         auto ctx = std::make_unique<VMergeIteratorContext>(
                 iter, _sequence_id_idx, _is_unique, _is_reverse, opts.read_orderby_key_columns);
@@ -407,6 +422,7 @@ Status VUnionIterator::current_block_row_locations(std::vector<RowLocation>* loc
 
 RowwiseIterator* new_merge_iterator(std::vector<RowwiseIterator*>& inputs, int sequence_id_idx,
                                     bool is_unique, bool is_reverse, uint64_t* merged_rows) {
+    LOG(WARNING) << "OOXXOO" << is_reverse;
     if (inputs.size() == 1) {
         LOG(WARNING) << "OOXXOO no wait only one segment!";
         return *(inputs.begin());

@@ -272,6 +272,9 @@ Status NewOlapScanner::_init_tablet_reader_params(
             _tablet_reader_params.read_orderby_key = true;
             if (!olap_scan_node.sort_info.is_asc_order[0]) {
                 _tablet_reader_params.read_orderby_key_reverse = true;
+                LOG(WARNING) << "OOXXOO: is decend, need reverse";
+            } else {
+                LOG(WARNING) << "OOXXOO: is ascend, not reverse";
             }
             _tablet_reader_params.read_orderby_key_num_prefix_columns =
                     olap_scan_node.sort_info.is_asc_order.size();

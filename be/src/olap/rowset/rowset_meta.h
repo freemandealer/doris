@@ -270,6 +270,7 @@ public:
     }
 
     bool is_singleton_delta() const {
+        LOG(WARNING) << "has_version()" <<  has_version() << "_rowset_meta_pb.start_version()" << _rowset_meta_pb.start_version() << "_rowset_meta_pb.end_version()" << _rowset_meta_pb.end_version();
         return has_version() && _rowset_meta_pb.start_version() == _rowset_meta_pb.end_version();
     }
 
@@ -303,6 +304,7 @@ public:
     //    which always produces non-overlapped segments)
     // 3. segments_overlap() flag is not NONOVERLAPPING (OVERLAP_UNKNOWN and OVERLAPPING are OK)
     bool is_segments_overlapping() const {
+        LOG(WARNING) << "num_segments" << num_segments() << "is_singleton_delta()" << is_singleton_delta() << "segments_overlap()" << segments_overlap();
         return num_segments() > 1 && is_singleton_delta() && segments_overlap() != NONOVERLAPPING;
     }
 

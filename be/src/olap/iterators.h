@@ -65,7 +65,37 @@ public:
         // whether `upper_key` is included in the range
         bool include_upper;
     };
+    void debug_info() const {
+        std::ostringstream os;
 
+        os << " delete_bitmap size:" << delete_bitmap.size();
+        os << " push_down_agg_type_opt:" << push_down_agg_type_opt;
+        os << " stats:" << stats;
+        os << " column_predicates size:" << column_predicates.size();
+        os << " use_page_cache:" << use_page_cache;
+        os << " block_row_max:" << block_row_max;
+        os << " record_rowids:" << record_rowids;
+        os << " read_orderby_key_reverse:" << read_orderby_key_reverse;
+        if (read_orderby_key_columns) {
+            os << " read_orderby_key_columns size:" <<read_orderby_key_columns->size();
+        } else {
+            os << " read_orderby_key_columns:nullptr";
+        }
+
+        if (tablet_schema.get())
+            os << " tablet_schema->version:" << tablet_schema->schema_version();
+        else
+            os << " tablet_schema:nullptr";
+        os << " io_ctx.reader_type" << io_ctx.reader_type;
+        os << " key_ranges size:" << key_ranges.size();
+        os << " [";
+
+        for (auto& itr : key_ranges) {
+            os << "[" << itr.include_lower << "," << itr.include_upper << "," << itr.lower_key << "," << itr.upper_key << "]";
+        }
+        os << " ]";
+        LOG(WARNING) << os.str();
+    }
     // reader's key ranges, empty if not existed.
     // used by short key index to filter row blocks
     std::vector<KeyRange> key_ranges;

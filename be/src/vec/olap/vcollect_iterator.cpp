@@ -40,6 +40,7 @@ VCollectIterator::~VCollectIterator() {
 }
 
 void VCollectIterator::init(TabletReader* reader, bool force_merge, bool is_reverse) {
+    LOG(WARNING) << "OOXXOO" << is_reverse;
     _reader = reader;
     // when aggregate is enabled or key_type is DUP_KEYS, we don't merge
     // multiple data to aggregate for better performance
@@ -144,6 +145,7 @@ bool VCollectIterator::LevelIteratorComparator::operator()(LevelIterator* lhs, L
     int cmp_res = UNLIKELY(lhs->compare_columns())
                           ? lhs_ref.compare(rhs_ref, lhs->compare_columns())
                           : lhs_ref.compare(rhs_ref, lhs->tablet_schema().num_key_columns());
+    LOG(WARNING) << "OOXXOO" << _is_reverse;
     if (cmp_res != 0) {
         return UNLIKELY(_is_reverse) ? cmp_res < 0 : cmp_res > 0;
     }
@@ -306,6 +308,7 @@ VCollectIterator::Level1Iterator::Level1Iterator(
           _merge(merge),
           _is_reverse(is_reverse),
           _skip_same(skip_same) {
+    LOG(WARNING) << "OOXXOO" << _is_reverse;
     _ref.reset();
     _batch_size = reader->_batch_size;
 }
@@ -383,6 +386,7 @@ Status VCollectIterator::Level1Iterator::init(bool get_data_by_ref) {
                 break;
             }
         }
+        LOG(WARNING) << "OOXXOO" << _is_reverse;
         _heap.reset(new MergeHeap {LevelIteratorComparator(sequence_loc, _is_reverse)});
         for (auto child : _children) {
             DCHECK(child != nullptr);
