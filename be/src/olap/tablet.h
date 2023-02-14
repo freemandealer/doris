@@ -68,7 +68,7 @@ public:
 
     Tablet(TabletMetaSharedPtr tablet_meta, DataDir* data_dir,
            const std::string& cumulative_compaction_type = "");
-    Tablet() {};
+
     Status init();
     bool init_succeeded();
 
