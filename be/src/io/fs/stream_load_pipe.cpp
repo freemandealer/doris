@@ -30,22 +30,34 @@
 #include "util/bit_util.h"
 
 namespace doris {
+
+std::map<UniqueId, io::StreamLoadPipe*> g_streamloadpipes;
+std::mutex g_streamloadpipes_lock;
+
 namespace io {
 class IOContext;
 
 StreamLoadPipe::StreamLoadPipe(size_t max_buffered_bytes, size_t min_chunk_size,
-                               int64_t total_length, bool use_proto)
+                               int64_t total_length, bool use_proto, UniqueId id)
         : _buffered_bytes(0),
           _proto_buffered_bytes(0),
           _max_buffered_bytes(max_buffered_bytes),
           _min_chunk_size(min_chunk_size),
           _total_length(total_length),
-          _use_proto(use_proto) {}
+          _use_proto(use_proto),
+          _id(id) {
+    std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+    g_streamloadpipes[_id] = this;
+}
 
 StreamLoadPipe::~StreamLoadPipe() {
     SCOPED_SWITCH_THREAD_MEM_TRACKER_LIMITER(ExecEnv::GetInstance()->orphan_mem_tracker());
     while (!_buf_queue.empty()) {
         _buf_queue.pop_front();
+    }
+    {
+        std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+        g_streamloadpipes.erase(_id);
     }
 }
 
@@ -196,6 +208,7 @@ Status StreamLoadPipe::_read_next_buffer(std::unique_ptr<uint8_t[]>* data, size_
 }
 
 Status StreamLoadPipe::_append(const ByteBufferPtr& buf, size_t proto_byte_size) {
+    _last_active = GetCurrentTimeMicros();
     {
         std::unique_lock<std::mutex> l(_lock);
         // if _buf_queue is empty, we append this buf without size check
@@ -245,6 +258,10 @@ void StreamLoadPipe::cancel(const std::string& reason) {
         std::lock_guard<std::mutex> l(_lock);
         _cancelled = true;
         _cancelled_reason = reason;
+    }
+    {
+        std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+        g_streamloadpipes.erase(_id);
     }
     _get_cond.notify_all();
     _put_cond.notify_all();

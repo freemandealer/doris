@@ -34,6 +34,8 @@
 #include "runtime/message_body_sink.h"
 #include "util/byte_buffer.h"
 #include "util/slice.h"
+#include "util/uid_util.h"
+#include "util/time.h"
 
 namespace doris {
 namespace io {
@@ -45,7 +47,7 @@ class StreamLoadPipe : public MessageBodySink, public FileReader {
 public:
     StreamLoadPipe(size_t max_buffered_bytes = kMaxPipeBufferedBytes,
                    size_t min_chunk_size = 64 * 1024, int64_t total_length = -1,
-                   bool use_proto = false);
+                   bool use_proto = false, UniqueId id = UniqueId(0, 0));
 
     ~StreamLoadPipe() override;
 
@@ -79,6 +81,12 @@ public:
 
     FileSystemSPtr fs() const override { return nullptr; }
 
+    uint64_t last_active() { return _last_active; }
+
+    bool is_cancelled() { return _cancelled; }
+
+    bool is_finished() { return _finished; }
+
 protected:
     Status read_at_impl(size_t offset, Slice result, size_t* bytes_read,
                         const IOContext* io_ctx) override;
@@ -110,6 +118,8 @@ private:
     std::condition_variable _get_cond;
 
     ByteBufferPtr _write_buf;
+    UniqueId _id;
+    uint64_t _last_active = 0;
 
     // no use, only for compatibility with the `Path` interface
     Path _path = "";

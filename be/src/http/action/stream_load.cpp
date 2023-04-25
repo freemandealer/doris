@@ -70,6 +70,9 @@
 namespace doris {
 using namespace ErrorCode;
 
+bvar::Adder<uint64_t> g_byte_buffer_allocate_kb("byte_buffer", "allocate_kb");
+bvar::Adder<uint64_t> g_byte_buffer_cnt("byte_buffer", "allocate_cnt");
+
 DEFINE_COUNTER_METRIC_PROTOTYPE_2ARG(streaming_load_requests_total, MetricUnit::REQUESTS);
 DEFINE_COUNTER_METRIC_PROTOTYPE_2ARG(streaming_load_duration_ms, MetricUnit::MILLISECONDS);
 DEFINE_GAUGE_METRIC_PROTOTYPE_2ARG(streaming_load_current_processing, MetricUnit::REQUESTS);
@@ -243,7 +246,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
     ctx->two_phase_commit = req->header(HTTP_TWO_PHASE_COMMIT) == "true" ? true : false;
 
     LOG(INFO) << "new income streaming load request." << ctx->brief() << ", db=" << ctx->db
-              << ", tbl=" << ctx->table;
+              << ", tbl=" << ctx->table << "two_phase_commit: " << ctx->two_phase_commit;
 
     auto st = _on_header(req, ctx);
     if (!st.ok()) {
@@ -407,7 +410,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
     if (ctx->use_streaming) {
         auto pipe = std::make_shared<io::StreamLoadPipe>(
                 io::kMaxPipeBufferedBytes /* max_buffered_bytes */, 64 * 1024 /* min_chunk_size */,
-                ctx->body_bytes /* total_length */);
+                ctx->body_bytes /* total_length */, false, ctx->id);
         request.fileType = TFileType::FILE_STREAM;
         ctx->body_sink = pipe;
         ctx->pipe = pipe;
