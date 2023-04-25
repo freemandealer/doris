@@ -18,9 +18,11 @@
 #include "runtime/stream_load/stream_load_context.h"
 
 #include <sstream>
-
+#include "bvar/bvar.h"
 namespace doris {
 using namespace ErrorCode;
+
+bvar::Adder<int64> g_streamloadctx_obj_cnt("streamloadctx", "obj_cnt");
 
 std::string StreamLoadContext::to_json() const {
     rapidjson::StringBuffer s;

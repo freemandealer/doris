@@ -25,6 +25,9 @@
 namespace doris {
 using namespace ErrorCode;
 
+bvar::Adder<uint64_t> g_byte_buffer_allocate_kb("byte_buffer", "allocate_kb");
+bvar::Adder<uint64_t> g_byte_buffer_cnt("byte_buffer", "buffer_cnt");
+
 StorageByteBuffer::StorageByteBuffer()
         : _array(nullptr), _capacity(0), _limit(0), _position(0), _is_mmap(false) {}
 

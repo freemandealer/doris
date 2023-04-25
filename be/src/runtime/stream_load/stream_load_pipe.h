@@ -27,6 +27,7 @@
 #include "runtime/thread_context.h"
 #include "util/bit_util.h"
 #include "util/byte_buffer.h"
+#include "util/uid_util.h"
 
 namespace doris {
 
@@ -34,17 +35,24 @@ const size_t kMaxPipeBufferedBytes = 4 * 1024 * 1024;
 // StreamLoadPipe use to transfer data from producer to consumer
 // Data in pip is stored in chunks.
 
+class StreamLoadPipe;
+extern std::map<UniqueId, StreamLoadPipe*> g_streamloadpipes;
+
 class StreamLoadPipe : public MessageBodySink, public FileReader {
 public:
     StreamLoadPipe(size_t max_buffered_bytes = kMaxPipeBufferedBytes,
                    size_t min_chunk_size = 64 * 1024, int64_t total_length = -1,
-                   bool use_proto = false)
+                   bool use_proto = false, UniqueId id = UniqueId(0, 0))
             : _buffered_bytes(0),
               _proto_buffered_bytes(0),
               _max_buffered_bytes(max_buffered_bytes),
               _min_chunk_size(min_chunk_size),
               _total_length(total_length),
-              _use_proto(use_proto) {}
+              _use_proto(use_proto),
+              _id(id)
+    {
+        g_streamloadpipes[_id] = this;
+    }
 
     virtual ~StreamLoadPipe() {
         SCOPED_SWITCH_THREAD_MEM_TRACKER_LIMITER(ExecEnv::GetInstance()->orphan_mem_tracker());
@@ -128,6 +136,9 @@ public:
         return st;
     }
 
+    bool is_cancelled() { return _cancelled; }
+    bool is_finished() { return _finished; }
+
     Status read(uint8_t* data, int64_t data_size, int64_t* bytes_read, bool* eof) override {
         SCOPED_SWITCH_THREAD_MEM_TRACKER_LIMITER(ExecEnv::GetInstance()->orphan_mem_tracker());
         *bytes_read = 0;
@@ -190,6 +201,7 @@ public:
             _finished = true;
         }
         _get_cond.notify_all();
+        g_streamloadpipes.erase(_id);
         return Status::OK();
     }
 
@@ -202,6 +214,7 @@ public:
         }
         _get_cond.notify_all();
         _put_cond.notify_all();
+        g_streamloadpipes.erase(_id);
     }
 
 private:
@@ -283,6 +296,7 @@ private:
     // size_t is unsigned, so use int64_t
     int64_t _total_length = -1;
     bool _use_proto = false;
+    UniqueId _id;
     std::deque<ByteBufferPtr> _buf_queue;
     std::deque<std::unique_ptr<PDataRow>> _data_row_ptrs;
     std::condition_variable _put_cond;

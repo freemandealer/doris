@@ -237,7 +237,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
     ctx->two_phase_commit = req->header(HTTP_TWO_PHASE_COMMIT) == "true" ? true : false;
 
     LOG(INFO) << "new income streaming load request." << ctx->brief() << ", db=" << ctx->db
-              << ", tbl=" << ctx->table;
+              << ", tbl=" << ctx->table << "two_phase_commit: " << ctx->two_phase_commit;
 
     auto st = _on_header(req, ctx);
     if (!st.ok()) {
@@ -381,6 +381,8 @@ void StreamLoadAction::free_handler_ctx(void* param) {
     }
 }
 
+extern std::map<UniqueId, StreamLoadPipe*> g_streamloadpipes;
+
 Status StreamLoadAction::_process_put(HttpRequest* http_req, StreamLoadContext* ctx) {
     // Now we use stream
     ctx->use_streaming = is_format_support_streaming(ctx->format);
@@ -398,7 +400,9 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req, StreamLoadContext* 
     if (ctx->use_streaming) {
         auto pipe = std::make_shared<StreamLoadPipe>(kMaxPipeBufferedBytes /* max_buffered_bytes */,
                                                      64 * 1024 /* min_chunk_size */,
-                                                     ctx->body_bytes /* total_length */);
+                                                     ctx->body_bytes /* total_length */,
+                                                     false,
+                                                     ctx->id);
         RETURN_IF_ERROR(_exec_env->load_stream_mgr()->put(ctx->id, pipe));
         request.fileType = TFileType::FILE_STREAM;
         ctx->body_sink = pipe;

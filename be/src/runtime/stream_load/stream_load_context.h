@@ -34,6 +34,7 @@
 #include "util/string_util.h"
 #include "util/time.h"
 #include "util/uid_util.h"
+#include "bvar/bvar.h"
 
 namespace doris {
 
@@ -80,13 +81,17 @@ public:
 
 class MessageBodySink;
 
+extern bvar::Adder<int64> g_streamloadctx_obj_cnt;
+
 class StreamLoadContext {
 public:
     StreamLoadContext(ExecEnv* exec_env) : id(UniqueId::gen_uid()), _exec_env(exec_env), _refs(0) {
         start_millis = UnixMillis();
+        g_streamloadctx_obj_cnt << 1;
     }
 
     ~StreamLoadContext() {
+        g_streamloadctx_obj_cnt << -1;
         if (need_rollback) {
             _exec_env->stream_load_executor()->rollback_txn(this);
             need_rollback = false;
