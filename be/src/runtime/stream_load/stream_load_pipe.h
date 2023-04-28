@@ -60,6 +60,10 @@ public:
     virtual ~StreamLoadPipe() {
         SCOPED_SWITCH_THREAD_MEM_TRACKER_LIMITER(ExecEnv::GetInstance()->orphan_mem_tracker());
         while (!_buf_queue.empty()) _buf_queue.pop_front();
+        {
+            std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+            g_streamloadpipes.erase(_id);
+        }
     }
 
     Status open() override { return Status::OK(); }
@@ -207,10 +211,6 @@ public:
         {
             std::lock_guard<std::mutex> l(_lock);
             _finished = true;
-        }
-        {
-            std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
-            g_streamloadpipes.erase(_id);
         }
         _get_cond.notify_all();
         return Status::OK();

@@ -145,7 +145,6 @@ StreamLoadAction::~StreamLoadAction() {
 
 void StreamLoadAction::handle(HttpRequest* req) {
     StreamLoadContext* ctx = (StreamLoadContext*)req->handler_ctx();
-    LOG(INFO) << "streamload handle, req=" << req->get_evhttp_request() << " HttpRequest=" << req << " ctx=" << ctx;
     if (ctx == nullptr) {
         return;
     }
@@ -174,7 +173,6 @@ void StreamLoadAction::handle(HttpRequest* req) {
     // add new line at end
     str = str + '\n';
     HttpChannel::send_reply(req, str);
-    LOG(INFO) << "streamload handle, send_reply complete, req=" << req->get_evhttp_request() << " HttpRequest=" << req << " ctx=" << ctx;
 #ifndef BE_TEST
     if (config::enable_stream_load_record) {
         str = ctx->prepare_stream_load_record(str);
@@ -200,7 +198,6 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
         ctx->body_sink.reset();
         RETURN_IF_ERROR(_exec_env->stream_load_executor()->execute_plan_fragment(ctx));
     } else {
-        LOG(INFO) << "streamload _handle before finish, ctx=" << ctx << " pipe=" << ctx->body_sink.get();
         RETURN_IF_ERROR(ctx->body_sink->finish());
     }
 
@@ -221,11 +218,9 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
 }
 
 int StreamLoadAction::on_header(HttpRequest* req) {
-    LOG(INFO) << "streamload on header, req=" << req->get_evhttp_request() << " HttpRequest=" << req;
     streaming_load_current_processing->increment(1);
 
     StreamLoadContext* ctx = new StreamLoadContext(_exec_env);
-    LOG(INFO) << "streamload on header, req=" << req->get_evhttp_request() << " HttpRequest=" << req << " ctx=" << ctx;
     ctx->ref();
     req->set_handler_ctx(ctx);
 
@@ -348,7 +343,6 @@ Status StreamLoadAction::_on_header(HttpRequest* http_req, StreamLoadContext* ct
 
 void StreamLoadAction::on_chunk_data(HttpRequest* req) {
     StreamLoadContext* ctx = (StreamLoadContext*)req->handler_ctx();
-    LOG(INFO) << "streamload on chunk, req=" << req->get_evhttp_request() << " HttpRequest=" << req << " ctx=" << ctx;
     if (ctx == nullptr || !ctx->status.ok()) {
         return;
     }
@@ -376,10 +370,8 @@ void StreamLoadAction::on_chunk_data(HttpRequest* req) {
 void StreamLoadAction::free_handler_ctx(void* param) {
     StreamLoadContext* ctx = (StreamLoadContext*)param;
     if (ctx == nullptr) {
-        LOG(INFO) << "streamload in free handler, ctx=" << ctx;
         return;
     }
-    LOG(INFO) << "streamload in free handler, ctx=" << ctx << " pipe=" << ctx->body_sink.get();
     // sender is gone, make receiver know it
     if (ctx->body_sink != nullptr) {
         ctx->body_sink->cancel("sender is gone");
@@ -412,7 +404,6 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req, StreamLoadContext* 
         RETURN_IF_ERROR(_exec_env->load_stream_mgr()->put(ctx->id, pipe));
         request.fileType = TFileType::FILE_STREAM;
         ctx->body_sink = pipe;
-        LOG(INFO) << "streamload process put, req=" << http_req->get_evhttp_request() << " HttpRequest=" << http_req << " ctx=" << ctx << " pipe=" << pipe.get();
     } else {
         RETURN_IF_ERROR(_data_saved_path(http_req, &request.path));
         auto file_sink = std::make_shared<MessageBodyFileSink>(request.path);

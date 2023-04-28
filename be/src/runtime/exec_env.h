@@ -269,10 +269,10 @@ private:
     StoragePolicyMgr* _storage_policy_mgr = nullptr;
     doris::vectorized::ScannerScheduler* _scanner_scheduler = nullptr;
 
-    CountDownLatch _cancel_timeout_streamloadpipe_latch;
+    CountDownLatch _check_streamloadpipe_latch;
     // thread to clean timeout load channels
-    scoped_refptr<Thread> _cancel_timeout_streamloadpipe_thread;
-    void _cancel_timeout_streamloadpipe();
+    scoped_refptr<Thread> _check_streamloadpipe_thread;
+    void _check_streamloadpipe();
 };
 
 template <>
