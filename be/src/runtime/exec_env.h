@@ -22,7 +22,9 @@
 #include "common/config.h"
 #include "common/status.h"
 #include "olap/options.h"
+#include "util/thread.h"
 #include "util/threadpool.h"
+#include "util/countdown_latch.h"
 
 namespace doris {
 namespace vectorized {
@@ -266,6 +268,11 @@ private:
     HeartbeatFlags* _heartbeat_flags = nullptr;
     StoragePolicyMgr* _storage_policy_mgr = nullptr;
     doris::vectorized::ScannerScheduler* _scanner_scheduler = nullptr;
+
+    CountDownLatch _cancel_timeout_streamloadpipe_latch;
+    // thread to clean timeout load channels
+    scoped_refptr<Thread> _cancel_timeout_streamloadpipe_thread;
+    void _cancel_timeout_streamloadpipe();
 };
 
 template <>

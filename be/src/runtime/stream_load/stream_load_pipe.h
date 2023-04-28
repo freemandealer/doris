@@ -28,6 +28,7 @@
 #include "util/bit_util.h"
 #include "util/byte_buffer.h"
 #include "util/uid_util.h"
+#include "util/time.h"
 
 namespace doris {
 
@@ -37,6 +38,7 @@ const size_t kMaxPipeBufferedBytes = 4 * 1024 * 1024;
 
 class StreamLoadPipe;
 extern std::map<UniqueId, StreamLoadPipe*> g_streamloadpipes;
+extern std::mutex g_streamloadpipes_lock;
 
 class StreamLoadPipe : public MessageBodySink, public FileReader {
 public:
@@ -51,6 +53,7 @@ public:
               _use_proto(use_proto),
               _id(id)
     {
+        std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
         g_streamloadpipes[_id] = this;
     }
 
@@ -62,6 +65,7 @@ public:
     Status open() override { return Status::OK(); }
 
     Status append_and_flush(const char* data, size_t size, size_t proto_byte_size = 0) {
+        _last_active = GetCurrentTimeMicros();
         ByteBufferPtr buf = ByteBuffer::allocate(BitUtil::RoundUpToPowerOfTwo(size + 1));
         buf->put_bytes(data, size);
         buf->flip();
@@ -69,6 +73,7 @@ public:
     }
 
     Status append(std::unique_ptr<PDataRow>&& row) {
+        _last_active = GetCurrentTimeMicros();
         PDataRow* row_ptr = row.get();
         {
             std::unique_lock<std::mutex> l(_lock);
@@ -79,6 +84,7 @@ public:
     }
 
     Status append(const char* data, size_t size) override {
+        _last_active = GetCurrentTimeMicros();
         size_t pos = 0;
         if (_write_buf != nullptr) {
             if (size < _write_buf->remaining()) {
@@ -102,6 +108,7 @@ public:
     }
 
     Status append(const ByteBufferPtr& buf) override {
+        _last_active = GetCurrentTimeMicros();
         if (_write_buf != nullptr) {
             _write_buf->flip();
             RETURN_IF_ERROR(_append(_write_buf));
@@ -191,6 +198,7 @@ public:
 
     // called when producer finished
     Status finish() override {
+        LOG(INFO) << "finish pipe=" << this;
         if (_write_buf != nullptr) {
             _write_buf->flip();
             _append(_write_buf);
@@ -200,22 +208,31 @@ public:
             std::lock_guard<std::mutex> l(_lock);
             _finished = true;
         }
+        {
+            std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+            g_streamloadpipes.erase(_id);
+        }
         _get_cond.notify_all();
-        g_streamloadpipes.erase(_id);
         return Status::OK();
     }
 
     // called when producer/consumer failed
     void cancel(const std::string& reason) override {
+        LOG(INFO) << "cancel pipe=" << this;
         {
             std::lock_guard<std::mutex> l(_lock);
             _cancelled = true;
             _cancelled_reason = reason;
         }
+        {
+            std::lock_guard<std::mutex> l(g_streamloadpipes_lock);
+            g_streamloadpipes.erase(_id);
+        }
         _get_cond.notify_all();
         _put_cond.notify_all();
-        g_streamloadpipes.erase(_id);
     }
+
+    uint64_t last_active() { return _last_active; }
 
 private:
     // read the next buffer from _buf_queue
@@ -301,6 +318,7 @@ private:
     std::deque<std::unique_ptr<PDataRow>> _data_row_ptrs;
     std::condition_variable _put_cond;
     std::condition_variable _get_cond;
+    uint64_t _last_active = 0;
 
     ByteBufferPtr _write_buf;
 };
