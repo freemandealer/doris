@@ -83,11 +83,14 @@ SinkStreamHandler::~SinkStreamHandler() {
 
 Status SinkStreamHandler::_create_and_open_file(TargetSegmentPtr target_segment, std::string path) {
     LOG(INFO) << "create and open file, path = " << path;
-    std::shared_ptr<std::ofstream> file = std::make_shared<std::ofstream>();
-    file->open(path.c_str(), std::ios::out | std::ios::app);
+    int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        return Status::InternalError("open file error");
+    }
+    std::shared_ptr<io::LocalFileWriter> file_writer = std::make_shared<io::LocalFileWriter>(path, fd);
     {
         std::lock_guard<std::mutex> l(_file_map_lock);
-        _file_map[target_segment] = file; // TODO: better not so global
+        _file_map[target_segment] = file_writer; // TODO: better not so global
     }
     return Status::OK();
 }
@@ -101,22 +104,24 @@ Status SinkStreamHandler::_append_data(TargetSegmentPtr target_segment, std::sha
     if (itr == _file_map.end()) {
         return Status::InternalError("file not found");
     }
-    *(itr->second) << message->to_string();
+    std::shared_ptr<io::LocalFileWriter> file_writer = (itr->second);
+    file_writer->append(message->to_string());
     return Status::OK();
 }
 
 Status SinkStreamHandler::_close_file(TargetSegmentPtr target_segment, bool is_last_segment) {
-    std::shared_ptr<std::ofstream> file = nullptr;
+    std::shared_ptr<io::LocalFileWriter> file_writer = nullptr;
     {
         std::lock_guard<std::mutex> l(_file_map_lock);
         auto itr = _file_map.find(target_segment);
         if (itr == _file_map.end()) {
             return Status::InternalError("close file error");
         }
-        file = itr->second;
+        file_writer = itr->second;
         _file_map.erase(itr);
     }
-    file->close();
+    file_writer->finalize();
+    file_writer->close();
     LOG(INFO) << "OOXXOO close file, is_last_segment = " << is_last_segment << " ";
     return Status::OK();
 }
@@ -150,21 +155,20 @@ void SinkStreamHandler::_parse_header(butil::IOBuf *const message, PStreamHeader
               << ", indexid = " << hdr.index_id()
               << ", tabletid = " << hdr.tablet_id()
               << ", segmentid = " << hdr.segment_id()
+              << ", rowsetid = " << hdr.rowset_id()
+              << ", schema_hash = " << hdr.tablet_schema_hash()
               << ", is_last_segment = " << (hdr.has_is_last_segment()?hdr.is_last_segment():false);
 }
 
-uint64_t SinkStreamHandler::get_next_segmentid(TargetRowsetPtr target_rowset, int64_t segmentid, bool is_open) {
+uint64_t SinkStreamHandler::get_next_segmentid(TargetRowsetPtr target_rowset) {
     // TODO: need support concurrent flush memtable
     {
         std::lock_guard<std::mutex> l(_tablet_segment_next_id_lock);
         if (_tablet_segment_next_id.find(target_rowset) == _tablet_segment_next_id.end()) {
             _tablet_segment_next_id[target_rowset] = 0;
             return 0;
-        }
-        if (is_open) {
-            return ++_tablet_segment_next_id[target_rowset];
         } else {
-            return _tablet_segment_next_id[target_rowset];
+            return ++_tablet_segment_next_id[target_rowset];
         }
     }
 }
@@ -273,10 +277,28 @@ int SinkStreamHandler::on_received_messages(StreamId id, butil::IOBuf *const mes
         target_rowset->loadid = hdr.load_id();
         target_rowset->indexid = hdr.index_id();
         target_rowset->tabletid = hdr.tablet_id();
-        uint64_t final_segmentid = get_next_segmentid(target_rowset, hdr.segment_id(), hdr.opcode() == PStreamHeader::OPEN_FILE);
-        TargetSegmentPtr target_segment = std::make_shared<TargetSegment>();
-        target_segment->target_rowset = target_rowset;
-        target_segment->segmentid = final_segmentid;
+
+        TargetSegmentPtr target_segment = nullptr;
+
+        TargetSegmentPtr _raw_target_segment = std::make_shared<TargetSegment>();
+        _raw_target_segment->target_rowset = target_rowset;
+        _raw_target_segment->segmentid = hdr.segment_id();
+
+        if (hdr.opcode() == PStreamHeader::OPEN_FILE) {
+            std::lock_guard<std::mutex> l(_rawsegment_finalsegment_map_lock);
+            DCHECK(_rawsegment_finalsegment_map.find(_raw_target_segment) == _rawsegment_finalsegment_map.end());
+            TargetSegmentPtr _final_target_segment = std::make_shared<TargetSegment>();
+            _final_target_segment->target_rowset = target_rowset;
+            uint64_t final_segmentid = get_next_segmentid(target_rowset);
+            _final_target_segment->segmentid = final_segmentid;
+            _rawsegment_finalsegment_map[_raw_target_segment] = _final_target_segment;
+        }
+        {
+            std::lock_guard<std::mutex> l(_rawsegment_finalsegment_map_lock);
+            DCHECK(_rawsegment_finalsegment_map.find(_raw_target_segment) != _rawsegment_finalsegment_map.end());
+            target_segment = _rawsegment_finalsegment_map[_raw_target_segment];
+            DCHECK(target_segment.get());
+        }
 
         // serialize OPs on same file: open, write1, write2, ... , close
         if (_segment_token_map.find(target_segment) == _segment_token_map.end()) {
