@@ -37,8 +37,9 @@ public:
     Status init(PUniqueId load_id, int64_t index_id, int64_t tablet_id, RowsetId rowset_id,
                 int32_t segment_id, bool is_last_segment, int32_t schema_hash);
 
-    Status appendv(const Slice* data, size_t data_cnt) override;
+    Status appendv(const OwnedSlice* data, size_t data_cnt) override;
 
+    virtual Status appendv(const Slice* data, size_t data_cnt) override {CHECK(false); return Status::OK(); }
     Status finalize() override { return finalize(nullptr); }
 
     Status finalize(RowsetMetaPB* rowset_meta);
