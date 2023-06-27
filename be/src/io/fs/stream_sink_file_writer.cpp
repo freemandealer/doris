@@ -84,10 +84,8 @@ Status StreamSinkFileWriter::appendv(const OwnedSlice* data, size_t data_cnt) {
     buf.append(header.SerializeAsString());
     for (int i = 0; i < data_cnt; i++) {
         Slice slice = data[i].slice();
-        // buf.append_user_data(const_cast<void*>(static_cast<const void*>(slice.get_data())),
-        //                      slice.get_size(), deleter);
-        buf.append(const_cast<void*>(static_cast<const void*>(slice.get_data())),
-                              slice.get_size());
+        buf.append_user_data(const_cast<void*>(static_cast<const void*>(slice.get_data())),
+                              slice.get_size(), deleter);
         (const_cast<OwnedSlice*>(&data[i]))->release();
     }
 
