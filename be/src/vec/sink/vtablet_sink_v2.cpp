@@ -106,29 +106,39 @@ int StreamSinkHandler::on_received_messages(brpc::StreamId id, butil::IOBuf* con
 
         Status st(response.status());
 
-        LOG(INFO) << "received write stream sink response from backend " << backend_id
-                  << ", status " << st << ", tablet_id(" << response.tablet_id() << "), index_id("
-                  << response.index_id() << ")";
+        std::stringstream ss;
+        ss << "received write stream sink response from backend " << backend_id << ", status: "
+           << st << ", success tablet ids:";
+        for (auto tablet_id : response.success_tablet_ids()) {
+            ss << " " << tablet_id;
+        }
+        ss << ", failed tablet ids:";
+        for (auto tablet_id : response.failed_tablet_ids()) {
+            ss << " " << tablet_id;
+        }
+        LOG(INFO) << ss.str();
 
         int replica = _sink->_num_replicas;
 
-        auto tablet_id = response.tablet_id();
-
-        if (st.ok()) {
+        {
             std::lock_guard<bthread::Mutex> l(_sink->_tablet_success_map_mutex);
-            if (_sink->_tablet_success_map.count(tablet_id) == 0) {
-                _sink->_tablet_success_map.insert({tablet_id, {}});
+            for (auto tablet_id : response.success_tablet_ids()) {
+                if (_sink->_tablet_success_map.count(tablet_id) == 0) {
+                    _sink->_tablet_success_map.insert({tablet_id, {}});
+                }
+                _sink->_tablet_success_map[tablet_id].push_back(backend_id);
             }
-            _sink->_tablet_success_map[tablet_id].push_back(backend_id);
-        } else {
-            LOG(WARNING) << "stream sink failed: " << response.error_msg();
+        }
+        {
             std::lock_guard<bthread::Mutex> l(_sink->_tablet_failure_map_mutex);
-            if (_sink->_tablet_failure_map.count(tablet_id) == 0) {
-                _sink->_tablet_failure_map.insert({tablet_id, {}});
-            }
-            _sink->_tablet_failure_map[tablet_id].push_back(backend_id);
-            if (_sink->_tablet_failure_map[tablet_id].size() * 2 >= replica) {
-                // TODO: _sink->cancel();
+            for (auto tablet_id : response.failed_tablet_ids()) {
+                if (_sink->_tablet_failure_map.count(tablet_id) == 0) {
+                    _sink->_tablet_failure_map.insert({tablet_id, {}});
+                }
+                _sink->_tablet_failure_map[tablet_id].push_back(backend_id);
+                if (_sink->_tablet_failure_map[tablet_id].size() * 2 >= replica) {
+                    // TODO: _sink->cancel();
+                }
             }
         }
     }

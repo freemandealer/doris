@@ -220,7 +220,7 @@ Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_table
 void LoadStream::_report_result(StreamId stream, Status& st, std::vector<int64_t>* success_tablet_ids,
                                 std::vector<int64_t>* failed_tablet_ids) {
     LOG(INFO) << "OOXXOO report result, success tablet num " << success_tablet_ids->size()
-              << "failed tablet num " << failed_tablet_ids->size();
+              << ", failed tablet num " << failed_tablet_ids->size();
     // TODO
     butil::IOBuf buf;
     PWriteStreamSinkResponse response;
