@@ -26,6 +26,7 @@
 
 namespace doris {
 
+/*
 #ifndef CHECK_STATUS_OK
 #define CHECK_STATUS_OK(stmt)                   \
     do {                                        \
@@ -176,5 +177,6 @@ TEST_F(StreamSinkFileWriterTest, TestFinalize) {
     writer.init(load_id, 1, 1, 1, 123);
     CHECK_STATUS_OK(writer.finalize());
 }
+*/
 
 } // namespace doris

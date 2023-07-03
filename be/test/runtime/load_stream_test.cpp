@@ -32,9 +32,11 @@
 
 #include "common/config.h"
 #include "common/status.h"
+#include "exec/tablet_info.h"
 #include "gen_cpp/BackendService_types.h"
 #include "gen_cpp/FrontendService_types.h"
 #include "gtest/gtest_pred_impl.h"
+#include "runtime/descriptor_helper.h"
 #include "runtime/exec_env.h"
 #include "runtime/load_stream_mgr.h"
 
@@ -46,16 +48,280 @@ static const uint32_t MAX_PATH_LEN = 1024;
 StorageEngine* z_engine = nullptr;
 static const std::string zTestDir = "./data_test/data/load_stream_mgr_test";
 
+const int64_t NORMAL_TABLET_ID = 10000;
+const int64_t ABNORMAL_TABLET_ID = 40000;
+const int64_t NORMAL_INDEX_ID = 50000;
+const int64_t ABNORMAL_INDEX_ID = 60000;
+const int64_t SCHEMA_HASH = 90000;
+const uint32_t NORMAL_SENDER_ID = 0;
+const uint32_t ABNORMAL_SENDER_ID = 10000;
+const UniqueId NORMAL_LOAD_ID(1, 1);
+const UniqueId ABNORMAL_LOAD_ID(1, 0);
+std::string EMPTY_STRING;
+
+void construct_schema(OlapTableSchemaParam* schema) {
+    // construct schema
+    TOlapTableSchemaParam tschema;
+    tschema.db_id = 1;
+    tschema.table_id = 2;
+    tschema.version = 0;
+
+    // descriptor
+    {
+        TDescriptorTableBuilder dtb;
+        {
+            TTupleDescriptorBuilder tuple_builder;
+
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .type(TYPE_INT)
+                                           .column_name("c1")
+                                           .column_pos(1)
+                                           .build());
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .type(TYPE_BIGINT)
+                                           .column_name("c2")
+                                           .column_pos(2)
+                                           .build());
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .string_type(10)
+                                           .column_name("c3")
+                                           .column_pos(3)
+                                           .build());
+
+            tuple_builder.build(&dtb);
+        }
+        {
+            TTupleDescriptorBuilder tuple_builder;
+
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .type(TYPE_INT)
+                                           .column_name("c1")
+                                           .column_pos(1)
+                                           .build());
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .type(TYPE_BIGINT)
+                                           .column_name("c2")
+                                           .column_pos(2)
+                                           .build());
+            tuple_builder.add_slot(TSlotDescriptorBuilder()
+                                           .string_type(20)
+                                           .column_name("c3")
+                                           .column_pos(3)
+                                           .build());
+
+            tuple_builder.build(&dtb);
+        }
+
+        auto desc_tbl = dtb.desc_tbl();
+        tschema.slot_descs = desc_tbl.slotDescriptors;
+        tschema.tuple_desc = desc_tbl.tupleDescriptors[0];
+    }
+    // index
+    tschema.indexes.resize(2);
+    tschema.indexes[0].id = NORMAL_INDEX_ID;
+    tschema.indexes[0].columns = {"c1", "c2", "c3"};
+
+    tschema.indexes[1].id = NORMAL_INDEX_ID + 1;
+    tschema.indexes[1].columns = {"c1", "c2", "c3"};
+
+    schema->init(tschema);
+}
+ 
+// copied from delta_writer_test.cpp
+static void create_tablet_request(int64_t tablet_id, int32_t schema_hash,
+                                  TCreateTabletReq* request) {
+    request->tablet_id = tablet_id;
+    request->__set_version(1);
+    request->tablet_schema.schema_hash = schema_hash;
+    request->tablet_schema.short_key_column_count = 6;
+    request->tablet_schema.keys_type = TKeysType::AGG_KEYS;
+    request->tablet_schema.storage_type = TStorageType::COLUMN;
+    request->__set_storage_format(TStorageFormat::V2);
+
+    TColumn k1;
+
+    k1.__set_is_key(true);
+    k1.column_type.type = TPrimitiveType::TINYINT;
+    request->tablet_schema.columns.push_back(k1);
+
+    TColumn k2;
+    k2.column_name = "k2";
+    k2.__set_is_key(true);
+    k2.column_type.type = TPrimitiveType::SMALLINT;
+    request->tablet_schema.columns.push_back(k2);
+
+    TColumn k3;
+    k3.column_name = "k3";
+    k3.__set_is_key(true);
+    k3.column_type.type = TPrimitiveType::INT;
+    request->tablet_schema.columns.push_back(k3);
+
+    TColumn k4;
+    k4.column_name = "k4";
+    k4.__set_is_key(true);
+    k4.column_type.type = TPrimitiveType::BIGINT;
+    request->tablet_schema.columns.push_back(k4);
+
+    TColumn k5;
+    k5.column_name = "k5";
+    k5.__set_is_key(true);
+    k5.column_type.type = TPrimitiveType::LARGEINT;
+    request->tablet_schema.columns.push_back(k5);
+
+    TColumn k6;
+    k6.column_name = "k6";
+    k6.__set_is_key(true);
+    k6.column_type.type = TPrimitiveType::DATE;
+    request->tablet_schema.columns.push_back(k6);
+
+    TColumn k7;
+    k7.column_name = "k7";
+    k7.__set_is_key(true);
+    k7.column_type.type = TPrimitiveType::DATETIME;
+    request->tablet_schema.columns.push_back(k7);
+
+    TColumn k8;
+    k8.column_name = "k8";
+    k8.__set_is_key(true);
+    k8.column_type.type = TPrimitiveType::CHAR;
+    k8.column_type.__set_len(4);
+    request->tablet_schema.columns.push_back(k8);
+
+    TColumn k9;
+    k9.column_name = "k9";
+    k9.__set_is_key(true);
+    k9.column_type.type = TPrimitiveType::VARCHAR;
+    k9.column_type.__set_len(65);
+    request->tablet_schema.columns.push_back(k9);
+
+    TColumn k10;
+    k10.column_name = "k10";
+    k10.__set_is_key(true);
+    k10.column_type.type = TPrimitiveType::DECIMALV2;
+    k10.column_type.__set_precision(6);
+    k10.column_type.__set_scale(3);
+    request->tablet_schema.columns.push_back(k10);
+
+    TColumn k11;
+    k11.column_name = "k11";
+    k11.__set_is_key(true);
+    k11.column_type.type = TPrimitiveType::DATEV2;
+    request->tablet_schema.columns.push_back(k11);
+
+    TColumn v1;
+    v1.column_name = "v1";
+    v1.__set_is_key(false);
+    v1.column_type.type = TPrimitiveType::TINYINT;
+    v1.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v1);
+
+    TColumn v2;
+    v2.column_name = "v2";
+    v2.__set_is_key(false);
+    v2.column_type.type = TPrimitiveType::SMALLINT;
+    v2.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v2);
+
+    TColumn v3;
+    v3.column_name = "v3";
+    v3.__set_is_key(false);
+    v3.column_type.type = TPrimitiveType::INT;
+    v3.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v3);
+
+    TColumn v4;
+    v4.column_name = "v4";
+    v4.__set_is_key(false);
+    v4.column_type.type = TPrimitiveType::BIGINT;
+    v4.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v4);
+
+    TColumn v5;
+    v5.column_name = "v5";
+    v5.__set_is_key(false);
+    v5.column_type.type = TPrimitiveType::LARGEINT;
+    v5.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v5);
+
+    TColumn v6;
+    v6.column_name = "v6";
+    v6.__set_is_key(false);
+    v6.column_type.type = TPrimitiveType::DATE;
+    v6.__set_aggregation_type(TAggregationType::REPLACE);
+    request->tablet_schema.columns.push_back(v6);
+
+    TColumn v7;
+    v7.column_name = "v7";
+    v7.__set_is_key(false);
+    v7.column_type.type = TPrimitiveType::DATETIME;
+    v7.__set_aggregation_type(TAggregationType::REPLACE);
+    request->tablet_schema.columns.push_back(v7);
+
+    TColumn v8;
+    v8.column_name = "v8";
+    v8.__set_is_key(false);
+    v8.column_type.type = TPrimitiveType::CHAR;
+    v8.column_type.__set_len(4);
+    v8.__set_aggregation_type(TAggregationType::REPLACE);
+    request->tablet_schema.columns.push_back(v8);
+
+    TColumn v9;
+    v9.column_name = "v9";
+    v9.__set_is_key(false);
+    v9.column_type.type = TPrimitiveType::VARCHAR;
+    v9.column_type.__set_len(65);
+    v9.__set_aggregation_type(TAggregationType::REPLACE);
+    request->tablet_schema.columns.push_back(v9);
+
+    TColumn v10;
+    v10.column_name = "v10";
+    v10.__set_is_key(false);
+    v10.column_type.type = TPrimitiveType::DECIMALV2;
+    v10.column_type.__set_precision(6);
+    v10.column_type.__set_scale(3);
+    v10.__set_aggregation_type(TAggregationType::SUM);
+    request->tablet_schema.columns.push_back(v10);
+
+    TColumn v11;
+    v11.column_name = "v11";
+    v11.__set_is_key(false);
+    v11.column_type.type = TPrimitiveType::DATEV2;
+    v11.__set_aggregation_type(TAggregationType::REPLACE);
+    request->tablet_schema.columns.push_back(v11);
+}
+
+struct ResponseStat {
+    int32_t num = 0;
+    std::vector<int64_t> success_tablet_ids;
+    std::vector<int64_t> failed_tablet_ids;
+};
+
+static ResponseStat g_response_stat;
+
+void reset_response_stat() {
+    g_response_stat = ResponseStat();
+}
+
 class LoadStreamMgrTest : public testing::Test {
 public:
     class Handler : public brpc::StreamInputHandler {
     public:
         int on_received_messages(StreamId id, butil::IOBuf* const messages[],
                                  size_t size) override {
-            std::cerr << "on_received_messages" << std::endl;
-            for (size_t i = 0; i < size; ++i) {
-                std::cerr << "message[" << i << "]: " << messages[i]->to_string() << std::endl;
+            for (size_t i = 0; i < size; i++) {
+                PWriteStreamSinkResponse response;
+                butil::IOBufAsZeroCopyInputStream wrapper(*messages[i]);
+                response.ParseFromZeroCopyStream(&wrapper);
+                LOG(INFO) << "response " << response.DebugString();
+                g_response_stat.num++;
+                for (auto& id : response.success_tablet_ids()) {
+                    g_response_stat.success_tablet_ids.push_back(id);
+                }
+                for (auto& id : response.failed_tablet_ids()) {
+                    g_response_stat.failed_tablet_ids.push_back(id);
+                }
             }
+
             return 0;
         }
         void on_idle_timeout(StreamId id) override { std::cerr << "on_idle_timeout" << std::endl; }
@@ -65,7 +331,7 @@ public:
     class MockSinkClient {
     public:
         MockSinkClient() = default;
-        ~MockSinkClient() = default;
+        ~MockSinkClient() { disconnect(); }
 
         class MockClosure : public google::protobuf::Closure {
         public:
@@ -100,22 +366,37 @@ public:
                 return Status::InternalError("Fail to create stream");
             }
 
-            POpenStreamSinkRequest* request = new POpenStreamSinkRequest();
-            POpenStreamSinkResponse* response = new POpenStreamSinkResponse();
+            PTabletWriterOpenRequest request;
+            POpenStreamSinkResponse response;
             std::shared_ptr<PUniqueId> id = std::make_shared<PUniqueId>();
-            id->set_hi(1);
-            id->set_lo(1);
-            request->set_allocated_id(id.get());
-            stub.open_stream_sink(&_cntl, request, response, nullptr);
-            request->release_id();
-            delete request;
-            delete response;
+            request.mutable_id()->set_hi(1);
+            request.mutable_id()->set_lo(1);
+
+            OlapTableSchemaParam param;
+            construct_schema(&param);
+            request.set_allocated_schema(param.to_protobuf());
+            // unused
+            request.set_index_id(0);
+            request.set_txn_id(600001);
+            // request.set_schema(_parent->_schema->to_protobuf());
+            /* for (auto& tablet : _all_tablets) {
+                auto ptablet = request.add_tablets();
+                ptablet->set_partition_id(tablet.partition_id);
+                ptablet->set_tablet_id(tablet.tablet_id);
+            }*/
+            request.set_num_senders(2);
+            request.set_need_gen_rollup(false); // Useless but it is a required field in pb
+            request.set_is_vectorized(true);
+            request.set_backend_id(1);
+            request.set_enable_profile(true);
+            stub.open_stream_sink(&_cntl, &request, &response, nullptr);
             if (_cntl.Failed()) {
                 std::cerr << "open_stream_sink failed" << std::endl;
-                LOG(ERROR) << "Fail to open stream sink";
+                LOG(ERROR) << "Fail to open stream sink " << _cntl.ErrorText();
                 return Status::InternalError("Fail to open stream sink");
             }
 
+            request.release_schema();
             return Status::OK();
         }
 
@@ -132,7 +413,7 @@ public:
                 LOG(ERROR) << "Fail to write stream";
                 return Status::InternalError("Fail to write stream");
             }
-            std::cerr << "sent by stream successfully" << std::endl;
+            LOG(INFO) << "sent by stream successfully" << std::endl;
             return Status::OK();
         }
 
@@ -146,6 +427,59 @@ public:
     };
 
     LoadStreamMgrTest() = default;
+
+    void close_load(MockSinkClient& client, uint32_t sender_id) {
+        butil::IOBuf append_buf;
+        PStreamHeader header;
+        header.mutable_load_id()->set_hi(1);
+        header.mutable_load_id()->set_lo(1);
+        header.set_opcode(PStreamHeader::CLOSE_LOAD);
+        header.set_sender_id(sender_id);
+        size_t hdr_len = header.ByteSizeLong();
+        append_buf.append((char*)&hdr_len, sizeof(size_t));
+        append_buf.append(header.SerializeAsString());
+        client.send(&append_buf);
+        sleep(1);
+    }
+
+    void write_one_tablet(MockSinkClient& client, UniqueId load_id, uint32_t sender_id, int64_t index_id, int64_t tablet_id,
+                          uint32_t segid, std::string& data, bool segment_eos) {
+        // append data
+        butil::IOBuf append_buf;
+        PStreamHeader header;
+        header.set_opcode(PStreamHeader::APPEND_DATA);
+        header.mutable_load_id()->set_hi(load_id.hi);
+        header.mutable_load_id()->set_lo(load_id.lo);
+        header.set_index_id(index_id);
+        header.set_tablet_id(tablet_id);
+        header.set_segment_id(segid);
+        header.set_segment_eos(segment_eos);
+        header.set_sender_id(sender_id);
+        size_t hdr_len = header.ByteSizeLong();
+        append_buf.append((char*)&hdr_len, sizeof(size_t));
+        append_buf.append(header.SerializeAsString());
+        append_buf.append(data);
+        client.send(&append_buf);
+        sleep(1);
+    }
+
+    void write_abnormal_load(MockSinkClient& client) {
+            write_one_tablet(client, ABNORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, EMPTY_STRING, false);
+    }
+
+    void write_abnormal_index(MockSinkClient& client) {
+        write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, ABNORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+    }
+
+    void write_abnormal_sender(MockSinkClient& client) {
+        write_one_tablet(client, NORMAL_LOAD_ID, ABNORMAL_SENDER_ID, NORMAL_INDEX_ID,
+                         NORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+    }
+
+    void write_abnormal_tablet(MockSinkClient& client) {
+        write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID,
+                         ABNORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+    }
 
     void SetUp() override {
         srand(time(nullptr));
@@ -178,6 +512,11 @@ public:
         brpc::ServerOptions server_options;
         server_options.idle_timeout_sec = 300;
         CHECK_EQ(0, _server.Start("127.0.0.1:18947", &server_options)); // TODO: make port random
+
+        TCreateTabletReq request;
+        create_tablet_request(NORMAL_TABLET_ID, SCHEMA_HASH, &request);
+        Status res = z_engine->create_tablet(request);
+        EXPECT_EQ(Status::OK(), res);
     }
 
     void TearDown() override {
@@ -186,6 +525,7 @@ public:
             delete z_engine;
             z_engine = nullptr;
         }
+        ExecEnv::destroy(_env);
         _server.Stop(1000);
         CHECK_EQ(0, _server.Join());
         delete _internal_service;
@@ -196,150 +536,93 @@ public:
     PInternalServiceImpl* _internal_service;
 };
 
-TEST_F(LoadStreamMgrTest, open_append_close_file_twice) {
-    //LoadStreamMgr* stream_mgr = _env.get_sink_stream_mgr();
-    //StreamIdPtr stream = stream_mgr->get_free_stream_id();
-
+// <client, index, bucket>
+// one client
+TEST_F(LoadStreamMgrTest, one_client_abnormal_load) {
     MockSinkClient client;
-    client.connect_stream();
-    StreamId stream = client.get_stream_id();
-    CHECK_NE(stream, INVALID_STREAM_ID);
-    std::cerr << "stream id = " << stream << std::endl;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
 
-    std::stringstream path1;
-    path1 << zTestDir << "/" << std::to_string(1047);
+    write_abnormal_load(client);
+    // TODO check abnormal load id
 
-    /************* APPEND FILE *************/
-    {
-        butil::IOBuf append_buf;
-        PStreamHeader header;
-        std::string data = "file1 hello world 123 !@#$%^&*()_+";
-        header.set_opcode(PStreamHeader::APPEND_DATA);
-        std::shared_ptr<PUniqueId> loadid = std::make_shared<PUniqueId>();
-        loadid->set_hi(1);
-        loadid->set_lo(1);
-        header.set_allocated_load_id(loadid.get());
-        header.set_index_id(2);
-        header.set_tablet_id(3);
-        header.set_segment_id(4);
-        size_t hdr_len = header.ByteSizeLong();
-        append_buf.append((char*)&hdr_len, sizeof(size_t));
-        append_buf.append(header.SerializeAsString());
-        append_buf.append(data);
-        client.send(&append_buf);
-        header.release_load_id();
-        sleep(2);
-    }
+    reset_response_stat();
+    close_load(client, 1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    close_load(client, 0);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
+}
 
-    /************* CLOSE FILE **************/
-    {
-        butil::IOBuf close_buf;
-        PStreamHeader header;
-        header.set_opcode(PStreamHeader::APPEND_DATA);
-        std::shared_ptr<PUniqueId> loadid = std::make_shared<PUniqueId>();
-        loadid->set_hi(1);
-        loadid->set_lo(1);
-        header.set_allocated_load_id(loadid.get());
-        header.set_index_id(2);
-        header.set_tablet_id(3);
-        header.set_segment_id(4);
-        header.set_segment_eos(true);
-        size_t hdr_len = header.ByteSizeLong();
-        close_buf.append((char*)&hdr_len, sizeof(size_t));
-        close_buf.append(header.SerializeAsString());
-        client.send(&close_buf);
-        sleep(2);
-        std::ifstream ifs(path1.str());
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            (std::istreambuf_iterator<char>()));
-        std::string data = "file1 hello world 123 !@#$%^&*()_+";
-        CHECK_EQ(content, data);
-        header.release_load_id();
-    }
+TEST_F(LoadStreamMgrTest, one_client_abnormal_index) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
 
-    /****************************************/
-    /************* DO IT AGAIN   ************/
-    /****************************************/
-    std::stringstream path2;
-    path2 << zTestDir << "/" << std::to_string(1048);
+    reset_response_stat();
+    write_abnormal_index(client);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
 
-    /************** OPEN FILE **************/
-    {
-        std::cerr << "openfile" << std::endl;
-        butil::IOBuf open_buf;
-        PStreamHeader header;
-        header.set_opcode(PStreamHeader::OPEN_FILE);
-        std::shared_ptr<PUniqueId> loadid = std::make_shared<PUniqueId>();
-        loadid->set_hi(1);
-        loadid->set_lo(1);
-        header.set_allocated_load_id(loadid.get());
-        header.set_index_id(2);
-        header.set_tablet_id(3);
-        header.set_segment_id(5);
-        header.set_tablet_schema_hash(5);
-        size_t hdr_len = header.ByteSizeLong();
-        std::cerr << "on client side: hdr_len = " << hdr_len << std::endl;
-        open_buf.append((char*)&hdr_len, sizeof(size_t));
-        open_buf.append(header.SerializeAsString());
-        open_buf.append(path2.str());
-        client.send(&open_buf);
-        sleep(2);
-        CHECK_EQ(true, std::filesystem::exists(path2.str()));
-        header.release_load_id();
-    }
+    reset_response_stat();
+    close_load(client, 1);
+    EXPECT_EQ(g_response_stat.num, 1);
+}
 
-    /************* APPEND FILE *************/
-    {
-        butil::IOBuf append_buf;
-        PStreamHeader header;
-        std::string data = "file2 hello world 123 !@#$%^&*()_+";
-        header.set_opcode(PStreamHeader::APPEND_DATA);
-        std::shared_ptr<PUniqueId> loadid = std::make_shared<PUniqueId>();
-        loadid->set_hi(1);
-        loadid->set_lo(1);
-        header.set_allocated_load_id(loadid.get());
-        header.set_index_id(2);
-        header.set_tablet_id(3);
-        header.set_segment_id(5);
-        size_t hdr_len = header.ByteSizeLong();
-        append_buf.append((char*)&hdr_len, sizeof(size_t));
-        append_buf.append(header.SerializeAsString());
-        append_buf.append(data);
-        client.send(&append_buf);
-        sleep(2);
-        header.release_load_id();
-    }
+TEST_F(LoadStreamMgrTest, one_client_abnormal_sender) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
 
-    /************* CLOSE FILE **************/
-    {
-        butil::IOBuf close_buf;
-        PStreamHeader header;
-        header.set_opcode(PStreamHeader::APPEND_DATA);
-        std::shared_ptr<PUniqueId> loadid = std::make_shared<PUniqueId>();
-        loadid->set_hi(1);
-        loadid->set_lo(1);
-        header.set_allocated_load_id(loadid.get());
-        header.set_index_id(2);
-        header.set_tablet_id(3);
-        header.set_segment_id(5);
-        header.set_segment_eos(true);
-        size_t hdr_len = header.ByteSizeLong();
-        close_buf.append((char*)&hdr_len, sizeof(size_t));
-        close_buf.append(header.SerializeAsString());
-        client.send(&close_buf);
-        sleep(2);
-        std::ifstream ifs(path2.str());
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            (std::istreambuf_iterator<char>()));
-        std::string data = "file2 hello world 123 !@#$%^&*()_+";
-        CHECK_EQ(content, data);
-        header.release_load_id();
-        header.release_rowset_meta();
-        // CHECK
-    }
+    write_abnormal_sender(client);
 
-    sleep(2);
-    client.disconnect();
+    close_load(client, 1);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_abnormal_tablet) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    write_abnormal_tablet(client);
+
+    close_load(client, 1);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data = "file1 hello world 123 !@#$%^&*()_+";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, data, false);
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, data, true);
+
+    // CLOSE_LOAD
+    close_load(client, 1);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_three_tablet) {
+    // append data
+    // eos with data
+    // check data
+}
+
+TEST_F(LoadStreamMgrTest, one_client_three_index_three_tablet) {
+    // append data
+    // eos with data
+    // check data
+}
+
+TEST_F(LoadStreamMgrTest, three_client_three_index_three_tablet) {
+    // append data
+    // eos with data
+    // check data
 }
 
 } // namespace doris

@@ -38,9 +38,9 @@ class TabletStream {
 public:
     TabletStream(PUniqueId load_id, int64_t id, int64_t txn_id, uint32_t num_senders);
 
-    Status init(OlapTableSchemaParam* schema, int64_t partition_id);
+    Status init(OlapTableSchemaParam* schema, int64_t index_id, int64_t partition_id);
 
-    void append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    Status append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data);
     Status close();
     int64_t id() { return _id; }
 
@@ -64,7 +64,7 @@ public:
             : _id(id), _num_senders(num_senders), _load_id(load_id), _txn_id(txn_id), _schema(schema) {
     }
 
-    void append_data(uint32_t sender_id, int64_t tablet_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    Status append_data(uint32_t sender_id, int64_t tablet_id, uint32_t segid, bool eos, butil::IOBuf* data);
 
     void flush(uint32_t sender_id);
     void close(std::vector<int64_t>* success_tablet_ids, std::vector<int64_t>* failed_tablet_ids);
@@ -93,7 +93,7 @@ public:
     uint32_t add_rpc_stream() { return ++_num_rpc_streams; }
     uint32_t remove_rpc_stream() { return --_num_rpc_streams; }
 
-    void close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
+    Status close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
                std::vector<int64_t>* failed_tablet_ids);
 
     // callbacks called by brpc
@@ -103,9 +103,9 @@ public:
 
 private:
     void _parse_header(butil::IOBuf* const message, PStreamHeader& hdr);
-    void _append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id,
+    Status _append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id,
                       uint32_t segid, bool eos, butil::IOBuf* data);
-    void _report_result(StreamId stream, std::vector<int64_t>* success_tablet_ids,
+    void _report_result(StreamId stream, Status& st, std::vector<int64_t>* success_tablet_ids,
                          std::vector<int64_t>* failed_tablet_ids);
  
 private:
@@ -118,6 +118,7 @@ private:
     uint32_t _num_senders;
     int64_t _txn_id;
     std::shared_ptr<OlapTableSchemaParam> _schema;
+    std::vector<int64_t> _failed_tablet_ids;
 };
 
 using LoadStreamSharedPtr = std::shared_ptr<LoadStream>;

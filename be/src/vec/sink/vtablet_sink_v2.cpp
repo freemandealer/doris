@@ -103,16 +103,17 @@ int StreamSinkHandler::on_received_messages(brpc::StreamId id, butil::IOBuf* con
         PWriteStreamSinkResponse response;
         response.ParseFromZeroCopyStream(&wrapper);
 
+        Status st(response.status());
+
         LOG(INFO) << "received write stream sink response from backend " << backend_id
-                  << ", success(" << response.success() << "), error_msg(" << response.error_msg()
-                  << "), tablet_id(" << response.tablet_id() << "), index_id("
+                  << ", status " << st << ", tablet_id(" << response.tablet_id() << "), index_id("
                   << response.index_id() << ")";
 
         int replica = _sink->_num_replicas;
 
         auto key = std::make_pair(response.tablet_id(), response.index_id());
 
-        if (response.success()) {
+        if (st.ok()) {
             std::lock_guard<bthread::Mutex> l(_sink->_tablet_success_map_mutex);
             if (_sink->_tablet_success_map.count(key) == 0) {
                 _sink->_tablet_success_map.insert({key, {}});
@@ -303,13 +304,14 @@ Status VOlapTableSinkV2::_init_stream_pool(const NodeInfo& node_info, StreamPool
         POpenStreamSinkResponse response;
         stub->open_stream_sink(&cntl, &request, &response, nullptr);
         // TODO: this is a debug log
-        LOG(INFO) << "Got tablet schema of " << request.tablet_id() << " from backend "
+        /*LOG(INFO) << "Got tablet schema of " << request.tablet_id() << " from backend "
                   << node_info.id << ": num_short_key_columns = "
                   << response.tablet_schema().num_short_key_columns()
                   << ", num_rows_per_row_block = "
                   << response.tablet_schema().num_rows_per_row_block()
                   << ", enable_unique_key_merge_on_write = "
                   << response.enable_unique_key_merge_on_write();
+                  */
         _tablet_schema = std::make_shared<TabletSchema>();
         _tablet_schema->init_from_pb(response.tablet_schema());
         _enable_unique_key_merge_on_write = response.enable_unique_key_merge_on_write();

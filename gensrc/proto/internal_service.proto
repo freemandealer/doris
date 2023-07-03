@@ -678,15 +678,6 @@ message PGetTabletVersionsResponse {
     repeated PVersion versions = 2;
 };
 
-// open stream sink
-message POpenStreamSinkRequest {
-    optional PUniqueId id = 1;
-    optional int32 num_senders = 2;
-    optional int64 txnid = 3;
-    optional int64 tablet_id = 4;
-    optional int32 backend_id = 5;
-};
-
 message POpenStreamSinkResponse {
     optional PStatus status = 1;
     optional TabletSchemaPB tablet_schema = 2;
@@ -694,10 +685,12 @@ message POpenStreamSinkResponse {
 };
 
 message PWriteStreamSinkResponse {
-    optional bool success = 1;
+    optional PStatus status = 1;
     optional string error_msg = 2;
     optional int64 index_id = 3;
     optional int64 tablet_id = 4;
+    repeated int64 success_tablet_ids = 5;
+    repeated int64 failed_tablet_ids = 6;
 };
 
 message PStreamHeader {
@@ -728,7 +721,7 @@ service PBackendService {
     rpc cancel_plan_fragment(PCancelPlanFragmentRequest) returns (PCancelPlanFragmentResult);
     rpc fetch_data(PFetchDataRequest) returns (PFetchDataResult);
     rpc tablet_writer_open(PTabletWriterOpenRequest) returns (PTabletWriterOpenResult);
-    rpc open_stream_sink(POpenStreamSinkRequest) returns (POpenStreamSinkResponse);
+    rpc open_stream_sink(PTabletWriterOpenRequest) returns (POpenStreamSinkResponse);
     rpc open_partition(OpenPartitionRequest) returns (OpenPartitionResult);
     rpc tablet_writer_add_block(PTabletWriterAddBlockRequest) returns (PTabletWriterAddBlockResult);
     rpc tablet_writer_add_block_by_http(PEmptyRequest) returns (PTabletWriterAddBlockResult);

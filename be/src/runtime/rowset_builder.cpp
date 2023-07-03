@@ -152,7 +152,8 @@ Status RowsetBuilder::init() {
         _delete_bitmap.reset(new DeleteBitmap(_tablet->tablet_id()));
     }
     // build tablet schema in request level
-    _build_current_tablet_schema(_context.index_id, _context.table_schema_param, *_tablet->tablet_schema());
+    RETURN_IF_ERROR(_build_current_tablet_schema(_context.index_id, _context.table_schema_param,
+                    *_tablet->tablet_schema()));
     RowsetWriterContext context;
     context.txn_id = _context.txn_id;
     context.load_id = _context.load_id;
@@ -172,20 +173,25 @@ Status RowsetBuilder::init() {
 
 Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     DCHECK(_is_init);
-    Status st;
-
-    if (segid > _segment_file_writers.size() || _segment_file_writers[segid] == nullptr) {
-        io::FileWriterPtr file_writer;
-        st = _rowset_writer->create_file_writer(segid, &file_writer);
-        if (!st.ok()) {
-            _is_canceled = true;
-            return st;
+    if (segid > _segment_file_writers.size()) {
+        std::lock_guard lock_guard(_lock);
+        for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
+            Status st;
+            io::FileWriterPtr file_writer;
+            st = _rowset_writer->create_file_writer(segid, &file_writer);
+            if (!st.ok()) {
+                _is_canceled = true;
+                return st;
+            }
+            LOG(INFO) << " file_writer " << file_writer << "seg id " << segid;
+            _segment_file_writers.push_back(std::move(file_writer));
         }
-        _segment_file_writers[segid].reset(file_writer.release());
     }
 
     // TODO: IOBuf to Slice
-    return _segment_file_writers[segid]->append(buf.to_string());
+    auto& file_writer = _segment_file_writers[segid];
+    LOG(INFO) << " file_writer " << file_writer << "seg id " << segid;
+    return file_writer->append(buf.to_string());
 }
 
 Status RowsetBuilder::close_segment(uint32_t segid) {
@@ -272,7 +278,7 @@ Status RowsetBuilder::close() {
     return Status::OK();
 }
 
-void RowsetBuilder::_build_current_tablet_schema(int64_t index_id,
+Status RowsetBuilder::_build_current_tablet_schema(int64_t index_id,
                                                const OlapTableSchemaParam* table_schema_param,
                                                const TabletSchema& ori_tablet_schema) {
     _tablet_schema->copy_from(ori_tablet_schema);
@@ -280,9 +286,14 @@ void RowsetBuilder::_build_current_tablet_schema(int64_t index_id,
     int i = 0;
     auto indexes = table_schema_param->indexes();
     for (; i < indexes.size(); i++) {
+        LOG(INFO) << "index " << indexes[i]->index_id << " dest " << index_id;
         if (indexes[i]->index_id == index_id) {
             break;
         }
+    }
+
+    if (i == indexes.size()) {
+        return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown index_id {}", index_id);
     }
 
     if (indexes.size() > 0 && indexes[i]->columns.size() != 0 &&
@@ -298,6 +309,7 @@ void RowsetBuilder::_build_current_tablet_schema(int64_t index_id,
     // set partial update columns info
     _tablet_schema->set_partial_update_info(table_schema_param->is_partial_update(),
                                             table_schema_param->partial_update_input_columns());
+    return Status::OK();
 }
 
 } // namespace doris
