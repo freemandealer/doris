@@ -124,7 +124,8 @@ Status IndexStream::append_data(uint32_t sender_id, int64_t tablet_id,
     }
     int64_t partition_id = it->second;
     */
-    int64_t partition_id = 0;
+    // TODO pass partition_id
+    int64_t partition_id = 1;
     TabletStreamSharedPtr tablet_stream;
     {
         std::lock_guard lock_guard(_lock);
