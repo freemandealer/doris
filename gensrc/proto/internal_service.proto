@@ -710,14 +710,13 @@ message PStreamHeader {
     }
     optional PUniqueId load_id = 1;
     optional int64 index_id = 2;
-    optional int64 partition_id = 3;
-    optional int64 tablet_id = 4;
-    optional int32 segment_id = 5;
-    optional Opcode opcode = 6;
-    optional bool segment_eos = 7;
-    optional RowsetMetaPB rowset_meta = 8;
-    optional int32 tablet_schema_hash = 9;
-    optional uint32 sender_id = 10;
+    optional int64 tablet_id = 3;
+    optional int32 segment_id = 4;
+    optional Opcode opcode = 5;
+    optional bool segment_eos = 6;
+    optional int64 partition_id = 7;
+    optional int32 tablet_schema_hash = 8;
+    optional uint32 sender_id = 9;
 }
 
 service PBackendService {
