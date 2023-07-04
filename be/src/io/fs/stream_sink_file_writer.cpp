@@ -98,8 +98,6 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
 
-    stat->data_size = _bytes_appended;
-
     Status status = _stream_sender(buf);
     header.release_load_id();
     return status;
