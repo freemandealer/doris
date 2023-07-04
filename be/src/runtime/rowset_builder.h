@@ -39,6 +39,9 @@
 #include "olap/tablet_schema.h"
 #include "util/spinlock.h"
 #include "util/uid_util.h"
+#include "olap/rowset/rowset_writer.h"
+#include "butil/iobuf.h"
+#include "brpc/stream.h"
 
 namespace doris {
 
@@ -73,7 +76,7 @@ public:
     Status init();
 
     Status append_data(uint32_t segid, butil::IOBuf buf);
-    Status close_segment(uint32_t segid);
+    Status close_segment(uint32_t segid, SegmentStatisticsSharedPtr stat);
 
     void add_segments(std::vector<SegmentStatistics>& segstat);
 
@@ -88,6 +91,8 @@ private:
     void _build_current_tablet_schema(int64_t index_id,
                                       const OlapTableSchemaParam* table_schema_param,
                                       const TabletSchema& ori_tablet_schema);
+
+    RowsetSharedPtr _build_rowset();
 
     bool _is_init = false;
     bool _is_closed = false;
@@ -114,6 +119,9 @@ private:
 
     bool _success;
     std::vector<io::FileWriterPtr> _segment_file_writers;
+    std::shared_ptr<RowsetMeta> _rowset_meta;
+    std::unordered_map<uint32_t/*segid*/, SegmentStatisticsSharedPtr> _segment_stat_map;
+    std::mutex _segment_stat_map_lock;
 };
 
 using RowsetBuilderSharedPtr = std::shared_ptr<RowsetBuilder>;

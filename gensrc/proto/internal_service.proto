@@ -710,6 +710,13 @@ message PWriteStreamSinkResponse {
     repeated int64 failed_tablets = 3;
 };
 
+message SegmentStatisticsPB {
+    optional int64 row_num = 1;
+    optional int64 data_size = 2;
+    optional int64 index_size = 3;
+    optional KeyBoundsPB key_bounds = 4;
+}
+
 message PStreamHeader {
     enum Opcode {
         APPEND_DATA = 1;
@@ -723,6 +730,7 @@ message PStreamHeader {
     optional Opcode opcode = 6;
     optional bool segment_eos = 7;
     optional uint32 sender_id = 8;
+    optional SegmentStatisticsPB segment_statistics = 9;
 }
 
 service PBackendService {

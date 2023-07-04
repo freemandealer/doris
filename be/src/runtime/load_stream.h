@@ -29,6 +29,8 @@
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/status.h"
 #include <runtime/rowset_builder.h>
+#include "butil/iobuf.h"
+#include "brpc/stream.h"
 
 namespace doris {
 
@@ -40,7 +42,8 @@ public:
 
     Status init(OlapTableSchemaParam* schema, int64_t partition_id);
 
-    void append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    void append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data,
+                     SegmentStatisticsSharedPtr stat);
     Status close();
     int64_t id() { return _id; }
 
@@ -64,7 +67,8 @@ public:
             : _id(id), _num_senders(num_senders), _load_id(load_id), _txn_id(txn_id), _schema(schema) {
     }
 
-    void append_data(uint32_t sender_id, int64_t tablet_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    void append_data(uint32_t sender_id, int64_t tablet_id, uint32_t segid, bool eos,
+                     butil::IOBuf* data, SegmentStatisticsSharedPtr stat);
 
     void flush(uint32_t sender_id);
     void close(std::vector<int64_t>* success_tablet_ids, std::vector<int64_t>* failed_tablet_ids);
@@ -104,7 +108,7 @@ public:
 private:
     void _parse_header(butil::IOBuf* const message, PStreamHeader& hdr);
     void _append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id,
-                      uint32_t segid, bool eos, butil::IOBuf* data);
+                      uint32_t segid, bool eos, butil::IOBuf* data, SegmentStatisticsSharedPtr stat);
     void _report_result(StreamId stream, std::vector<int64_t>* success_tablet_ids,
                          std::vector<int64_t>* failed_tablet_ids);
  

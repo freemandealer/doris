@@ -54,7 +54,8 @@ Status TabletStream::init(OlapTableSchemaParam* schema, int64_t partition_id) {
     return _rowset_builder->init();
 }
 
-void TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data) {
+void TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data,
+                               SegmentStatisticsSharedPtr stat) {
     // TODO failed early
 
     // We don't need a lock protecting _segids_mapping, because it is written once.
@@ -76,22 +77,23 @@ void TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, but
         if (segid + 1 > origin_size) {
             _segids_mapping[sender_id].resize(segid + 1, std::numeric_limits<uint32_t>::max());
             // handle concurrency.
-            for (ssize_t index = origin_size; index <= segid; index++) {
+            for (size_t index = origin_size; index <= segid; index++) {
                 _segids_mapping[sender_id][index] = _next_segid;
                 _next_segid++;
             }
         }
     }
 
-    // Each sender sends data in one segment sequential, so we also does not
+    // Each sender sends data in one segment sequential, so we also do not
     // need a lock here.
     uint32_t new_segid = _segids_mapping[sender_id][segid];
     DCHECK(new_segid != std::numeric_limits<uint32_t>::max());
     butil::IOBuf buf = data->movable();
-    auto flush_func = [this, new_segid, eos, buf]() {
+    auto flush_func = [this, new_segid, eos, buf, stat]() {
          auto st = _rowset_builder->append_data(new_segid, buf);
          if (eos && st.ok()) {
-             st = _rowset_builder->close_segment(new_segid);
+             DCHECK(stat != nullptr);
+             st = _rowset_builder->close_segment(new_segid, stat);
          }
 
          if (!st.ok()) {
@@ -113,7 +115,8 @@ Status TabletStream::close() {
 }
 
 void IndexStream::append_data(uint32_t sender_id, int64_t tablet_id,
-                              uint32_t segid, bool eos, butil::IOBuf* data) {
+                              uint32_t segid, bool eos, butil::IOBuf* data,
+                              SegmentStatisticsSharedPtr stat) {
     auto it = _tablet_partitions.find(tablet_id);
     if (it == _tablet_partitions.end()) {
         _failed_tablet_ids.push_back(tablet_id);
@@ -134,7 +137,7 @@ void IndexStream::append_data(uint32_t sender_id, int64_t tablet_id,
     }
 
     // TODO: segid
-    tablet_stream->append_data(sender_id, segid, eos, data);
+    tablet_stream->append_data(sender_id, segid, eos, data, stat);
 }
 
 void IndexStream::close(std::vector<int64_t>* success_tablet_ids,
@@ -231,7 +234,7 @@ void LoadStream::_parse_header(butil::IOBuf* const message, PStreamHeader& hdr) 
 }
 
 void LoadStream::_append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id, uint32_t segid,
-                              bool eos, butil::IOBuf* data) {
+                              bool eos, butil::IOBuf* data, SegmentStatisticsSharedPtr stat) {
     IndexStreamSharedPtr index_stream;
 
     auto it = _index_streams_map.find(index_id);
@@ -241,12 +244,13 @@ void LoadStream::_append_data(uint32_t sender_id, int64_t index_id, int64_t tabl
         index_stream = it->second;
     }
 
-    index_stream->append_data(sender_id, tablet_id, segid, eos, data);
+    index_stream->append_data(sender_id, tablet_id, segid, eos, data, stat);
 }
 
 //TODO trigger build meta when last segment of all cluster is closed
 int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[],
                                      size_t size) {
+    std::shared_ptr<SegmentStatistics> stat = nullptr;
     LOG(INFO) << "OOXXOO on_received_messages " << id << " " << size;
     for (size_t i = 0; i < size; ++i) {
         // step 1: parse header
@@ -260,7 +264,12 @@ int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[]
         // step 2: dispatch
         switch (hdr.opcode()) {
         case PStreamHeader::APPEND_DATA:
-            _append_data(hdr.sender_id(), hdr.index_id(), hdr.tablet_id(), hdr.segment_id(), hdr.segment_eos(), messages[i]);
+            if (hdr.has_segment_statistics()) {
+                DCHECK(hdr.segment_eos() == true);
+                stat = std::make_shared<SegmentStatistics>(hdr.segment_statistics());
+            }
+            _append_data(hdr.sender_id(), hdr.index_id(), hdr.tablet_id(), hdr.segment_id(),
+                         hdr.segment_eos(), messages[i], stat);
             break;
         case PStreamHeader::CLOSE_LOAD:
             {

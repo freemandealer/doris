@@ -30,6 +30,7 @@
 #include "olap/rowset/rowset_writer_context.h"
 #include "olap/tablet_schema.h"
 #include "vec/core/block.h"
+#include "gen_cpp/internal_service.pb.h"
 
 namespace doris {
 
@@ -48,7 +49,33 @@ struct SegmentStatistics {
     int64_t data_size;
     int64_t index_size;
     KeyBoundsPB key_bounds;
+
+    SegmentStatistics() = default;
+
+    SegmentStatistics(SegmentStatisticsPB pb) {
+        row_num = pb.row_num();
+        data_size = pb.data_size();
+        index_size = pb.index_size();
+        key_bounds.CopyFrom(pb.key_bounds());
+    }
+
+    std::shared_ptr<SegmentStatisticsPB> to_pb() {
+        auto segstat_pb = std::make_shared<SegmentStatisticsPB>();
+        segstat_pb->set_row_num(row_num);
+        segstat_pb->set_data_size(data_size);
+        segstat_pb->set_index_size(index_size);
+        segstat_pb->mutable_key_bounds()->CopyFrom(key_bounds);
+        return segstat_pb;
+    }
+
+    std::string to_string() {
+        std::stringstream ss;
+        ss << "row_num: " << row_num << ", data_size: " << data_size << ", index_size: " << index_size
+           << ", key_bounds: " << key_bounds.ShortDebugString();
+        return ss.str();
+    }
 };
+using SegmentStatisticsSharedPtr = std::shared_ptr<SegmentStatistics>;
 
 class RowsetWriter {
 public:

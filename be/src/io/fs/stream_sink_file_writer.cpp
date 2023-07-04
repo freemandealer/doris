@@ -20,6 +20,7 @@
 #include <gen_cpp/internal_service.pb.h>
 
 #include "olap/olap_common.h"
+#include "olap/rowset/rowset_writer.h"
 
 namespace doris {
 namespace io {
@@ -53,14 +54,14 @@ Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
               << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
 
     if (_pending_bytes >= _max_pending_bytes) {
-        RETURN_IF_ERROR(_flush_pending_slices(false));
+        RETURN_IF_ERROR(_flush_pending_slices(false, nullptr));
     }
 
     LOG(INFO) << "current batched bytes: " << _pending_bytes;
     return Status::OK();
 }
 
-Status StreamSinkFileWriter::_flush_pending_slices(bool eos) {
+Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* stat) {
     PStreamHeader header;
     header.set_allocated_load_id(&_load_id);
     header.set_partition_id(_partition_id);
@@ -69,7 +70,11 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos) {
     header.set_segment_id(_segment_id);
     header.set_segment_eos(eos);
     header.set_opcode(doris::PStreamHeader::APPEND_DATA);
+    auto stat_pb = stat->to_pb();
+    header.set_allocated_segment_statistics(stat_pb.get());
+
     size_t header_len = header.ByteSizeLong();
+    LOG(INFO) << "OOXXOO header pb: " << header.DebugString();
 
     butil::IOBuf buf;
     buf.append(reinterpret_cast<uint8_t*>(&header_len), sizeof(header_len));
@@ -92,16 +97,20 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos) {
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
 
+    stat->data_size = _bytes_appended;
+
     Status status = _stream_sender(buf);
+    header.release_segment_statistics();
     header.release_load_id();
     return status;
 }
 
-Status StreamSinkFileWriter::finalize() {
+Status StreamSinkFileWriter::finalize(SegmentStatistics* stat) {
     LOG(INFO) << "writer finalize, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id;
-    return _flush_pending_slices(true);
+    // TODO(zhengyu): update get_inverted_index_file_size into stat
+    return _flush_pending_slices(true, stat);
 }
 
 Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf buf) {
@@ -121,6 +130,10 @@ Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf
             return Status::OK();
         }
     }
+}
+
+Status StreamSinkFileWriter::finalize() {
+    return Status::OK();
 }
 
 Status StreamSinkFileWriter::abort() {
