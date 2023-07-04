@@ -94,6 +94,7 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
             for (size_t index = origin_size; index <= segid; index++) {
                 _segids_mapping[sender_id][index] = _next_segid;
                 _next_segid++;
+                LOG(INFO) << "sender_id=" << sender_id <<", segid=" << index << " to " << " segid=" << _next_segid - 1;
             }
         }
     }

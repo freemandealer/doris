@@ -1003,9 +1003,10 @@ TEST_F(LoadStreamMgrTest, two_client_one_index_one_tablet_three_segment) {
         for (int i = 0; i < 2; i++) {
             butil::IOBuf append_buf;
             PStreamHeader header;
-            std::string data1 = "sender_id=" + std::to_string(i) + ",segid=" + std::to_string(segid) + "\n";
+            std::string data1 = "sender_id=" + std::to_string(i) + ",segid=" + std::to_string(segid);
             write_one_tablet(clients[i], NORMAL_LOAD_ID, NORMAL_SENDER_ID + i, NORMAL_INDEX_ID, NORMAL_TABLET_ID, segid, data1, true);
-            segment_data[i * 2 + segid] = data1;
+            segment_data[i * 3 + segid] = data1;
+            LOG(INFO) << "segment_data[" << i * 3 + segid << "]" << data1;
         }
     }
 
@@ -1031,9 +1032,23 @@ TEST_F(LoadStreamMgrTest, two_client_one_index_one_tablet_three_segment) {
     EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
     EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
 
-    for (int i = 0; i < segment_data.size(); i++) {
-        auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
-        EXPECT_EQ(written_data, segment_data[i]);
+    auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+    size_t sender_pos = written_data.find('=');
+    size_t sender_end = written_data.find(',');
+    EXPECT_NE(sender_pos, std::string::npos);
+    EXPECT_NE(sender_end, std::string::npos);
+    auto sender_str = written_data.substr(sender_pos + 1, sender_end - sender_pos);
+    LOG(INFO) << "sender_str " << sender_str;
+    uint32_t sender_id = std::stoi(sender_str);
+
+    for (int i = 0; i < 3; i++) {
+        auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, i);
+        EXPECT_EQ(written_data, segment_data[sender_id * 3 + i]);
+    }
+    sender_id = (sender_id + 1) % 2;
+    for (int i = 0; i < 3; i++) {
+        auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, i + 3);
+        EXPECT_EQ(written_data, segment_data[sender_id * 3 + i]);
     }
 
     for (int i = 0; i < 2; i++) {
