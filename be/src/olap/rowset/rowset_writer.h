@@ -59,13 +59,11 @@ struct SegmentStatistics {
         key_bounds.CopyFrom(pb.key_bounds());
     }
 
-    std::shared_ptr<SegmentStatisticsPB> to_pb() {
-        auto segstat_pb = std::make_shared<SegmentStatisticsPB>();
+    void to_pb(SegmentStatisticsPB* segstat_pb) {
         segstat_pb->set_row_num(row_num);
         segstat_pb->set_data_size(data_size);
         segstat_pb->set_index_size(index_size);
         segstat_pb->mutable_key_bounds()->CopyFrom(key_bounds);
-        return segstat_pb;
     }
 
     std::string to_string() {
