@@ -453,7 +453,7 @@ Status VOlapTableSinkV2::send(RuntimeState* state, vectorized::Block* input_bloc
         RETURN_IF_ERROR(_select_streams(tablet_id, closure->streams));
         _opened_tablets.insert(tablet_id);
         auto cnt = _flying_task_count.fetch_add(1) + 1;
-        DLOG(INFO) << "Creating WriteMemtableTask for Tablet(tablet id: " << closure->tablet_id
+        VLOG_DEBUG << "Creating WriteMemtableTask for Tablet(tablet id: " << closure->tablet_id
                    << ", index id: " << closure->index_id << "), flying task count: " << cnt;
         bthread_start_background(&th, nullptr, _write_memtable_task, closure);
         _write_memtable_threads.push_back(th);
@@ -470,7 +470,7 @@ void* VOlapTableSinkV2::_write_memtable_task(void* closure) {
         std::lock_guard<bthread::Mutex> l(*sink->_delta_writer_for_tablet_mutex);
         auto it = sink->_delta_writer_for_tablet->find(ctx->tablet_id);
         if (it == sink->_delta_writer_for_tablet->end()) {
-            DLOG(INFO) << "Creating DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
+            VLOG_DEBUG << "Creating DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
                        << ", index id: " << ctx->index_id << ")";
             DeltaWriterV2::WriteRequest wrequest;
             wrequest.partition_id = ctx->partition_id;
@@ -500,7 +500,7 @@ void* VOlapTableSinkV2::_write_memtable_task(void* closure) {
             sink->_delta_writer_for_tablet->insert(
                     {ctx->tablet_id, std::unique_ptr<DeltaWriterV2>(delta_writer)});
         } else {
-            DLOG(INFO) << "Reusing DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
+            VLOG_DEBUG << "Reusing DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
                        << ", index id: " << ctx->index_id << ")";
             delta_writer = it->second.get();
         }
@@ -508,7 +508,7 @@ void* VOlapTableSinkV2::_write_memtable_task(void* closure) {
     // sink->_table_sink_v2_mgr->handle_memtable_flush();
     auto st = delta_writer->write(ctx->block.get(), ctx->row_idxes, false);
     auto cnt = sink->_flying_task_count.fetch_sub(1) - 1;
-    DLOG(INFO) << "Finished writing Tablet(tablet id: " << ctx->tablet_id
+    VLOG_DEBUG << "Finished writing Tablet(tablet id: " << ctx->tablet_id
                << ", index id: " << ctx->index_id << "), flying task count: " << cnt;
     delete ctx;
     DCHECK_EQ(st, Status::OK()) << "DeltaWriterV2::write failed";
