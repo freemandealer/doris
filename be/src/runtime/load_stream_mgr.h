@@ -43,6 +43,11 @@ public:
         return _file_writer_thread_pool->new_token(ThreadPool::ExecutionMode::SERIAL);
     }
 
+    // only used by ut
+    size_t get_load_stream_num() {
+        return _load_streams_map.size();
+    }
+
 private:
     bthread::Mutex _lock;
     std::unordered_map<UniqueId, LoadStreamSharedPtr> _load_streams_map;

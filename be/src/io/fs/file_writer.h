@@ -68,6 +68,8 @@ public:
 
     FileSystemSPtr fs() const { return _fs; }
 
+    bool is_closed() { return _closed; }
+
 protected:
     Path _path;
     size_t _bytes_appended = 0;

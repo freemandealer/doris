@@ -38,6 +38,13 @@ TabletStream::TabletStream(PUniqueId load_id, int64_t id, int64_t txn_id, uint32
     }
 
     _segids_mapping.resize(num_senders);
+    _failed_st = std::make_shared<Status>();
+}
+
+inline std::ostream& operator<<(std::ostream& ostr, const TabletStream& tablet_stream) {
+    ostr << "load_id=" << tablet_stream._load_id << ", txn_id=" << tablet_stream._txn_id
+         << ", tablet_id=" << tablet_stream._id << ", status=" << *tablet_stream._failed_st;
+    return ostr;
 }
 
 Status TabletStream::init(OlapTableSchemaParam* schema, int64_t index_id, int64_t partition_id) {
@@ -52,23 +59,30 @@ Status TabletStream::init(OlapTableSchemaParam* schema, int64_t index_id, int64_
     context.table_schema_param = schema;
 
     _rowset_builder = std::make_shared<RowsetBuilder>(&context, _load_id);
-    return _rowset_builder->init();
+    auto st = _rowset_builder->init();
+    if (!st.ok()) {
+        _failed_st = std::make_shared<Status>(st);
+        LOG(INFO) << "failed to init rowset builder due to " << *this;
+    }
+    return st;
 }
 
-Status TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data) {
+Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
     // TODO failed early
 
+    uint32_t sender_id = header.sender_id();
     // We don't need a lock protecting _segids_mapping, because it is written once.
     if(sender_id >= _segids_mapping.size()) {
         LOG(WARNING) << "sender id is out of range, sender_id=" << sender_id << ", num_senders="
-                     << _segids_mapping.size();
+                     << _segids_mapping.size() << *this;
         std::lock_guard lock_guard(_lock);
-        _failed_st = Status::Error<ErrorCode::INVALID_ARGUMENT>("sender id is out of range {}/{}",
+        _failed_st = std::make_shared<Status>(Status::Error<ErrorCode::INVALID_ARGUMENT>("sender id is out of range {}/{}",
                                                                 sender_id,
-                                                                _segids_mapping.size());
+                                                                _segids_mapping.size()));
         return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown sender_id {}", sender_id);
     }
 
+    uint32_t segid = header.segment_id();
     // Ensure there are enough space and mapping are built.
     if (segid + 1 > _segids_mapping[sender_id].size()) {
         // TODO: Each sender lock is enough.
@@ -86,6 +100,7 @@ Status TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, b
 
     // Each sender sends data in one segment sequential, so we also does not
     // need a lock here.
+    bool eos = header.segment_eos();
     uint32_t new_segid = _segids_mapping[sender_id][segid];
     DCHECK(new_segid != std::numeric_limits<uint32_t>::max());
     butil::IOBuf buf = data->movable();
@@ -95,9 +110,9 @@ Status TabletStream::append_data(uint32_t sender_id, uint32_t segid, bool eos, b
              st = _rowset_builder->close_segment(new_segid);
          }
 
-         if (!st.ok()) {
-             std::lock_guard lock_guard(_lock);
-             _failed_st = st;
+         if (!st.ok() && _failed_st->ok()) {
+             _failed_st = std::make_shared<Status>(st);
+             LOG(INFO) << "write data failed " << *this;
          }
     };
     return _flush_tokens[segid % _flush_tokens.size()]->submit_func(flush_func);
@@ -107,25 +122,15 @@ Status TabletStream::close() {
     for (auto &token : _flush_tokens) {
         token->wait();
     }
-    if (!_failed_st.ok()) {
-        return _failed_st;
+    if (!_failed_st->ok()) {
+        return *_failed_st;
     }
     return _rowset_builder->close();
 }
 
-Status IndexStream::append_data(uint32_t sender_id, int64_t tablet_id,
-                                uint32_t segid, bool eos, butil::IOBuf* data) {
-    /*
-    auto it = _tablet_partitions.find(tablet_id);
-    if (it == _tablet_partitions.end()) {
-        LOG(WARNING) << "try to append data to unknown tablet, tablet_id " << tablet_id;
-        _failed_tablet_ids.push_back(tablet_id);
-        return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown tablet_id {}", tablet_id);
-    }
-    int64_t partition_id = it->second;
-    */
-    // TODO pass partition_id
-    int64_t partition_id = 1;
+Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
+
+    int64_t tablet_id = header.tablet_id();
     TabletStreamSharedPtr tablet_stream;
     {
         std::lock_guard lock_guard(_lock);
@@ -133,13 +138,13 @@ Status IndexStream::append_data(uint32_t sender_id, int64_t tablet_id,
         if (it == _tablet_streams_map.end()) {
             tablet_stream = std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _num_senders);
             _tablet_streams_map[tablet_id] = tablet_stream;
-            RETURN_IF_ERROR(tablet_stream->init(_schema.get(), _id, partition_id));
+            RETURN_IF_ERROR(tablet_stream->init(_schema.get(), _id, header.partition_id()));
         } else {
             tablet_stream = it->second;
         }
     }
 
-    return tablet_stream->append_data(sender_id, segid, eos, data);
+    return tablet_stream->append_data(header, data);
 }
 
 void IndexStream::close(std::vector<int64_t>* success_tablet_ids,
@@ -150,6 +155,7 @@ void IndexStream::close(std::vector<int64_t>* success_tablet_ids,
         if (st.ok()) {
             success_tablet_ids->push_back(it.second->id());
         } else {
+            LOG(INFO) << "close tablet stream " << *it.second << ", status=" << st;
             failed_tablet_ids->push_back(it.second->id());
         }
     }
@@ -161,6 +167,7 @@ LoadStream::LoadStream(PUniqueId id) : _id(id) {
 }
 
 LoadStream::~LoadStream() {
+    LOG(INFO) << "load stream is deconstructed " << *this;
 }
 
 Status LoadStream::init(const PTabletWriterOpenRequest* request) {
@@ -175,6 +182,7 @@ Status LoadStream::init(const PTabletWriterOpenRequest* request) {
         _index_streams_map[index.id()] = std::make_shared<IndexStream>(_id, index.id(), _txn_id,
                                                                        _num_senders, _schema);
     }
+    LOG(INFO) << "succeed to init load stream " << *this;
     return Status::OK();
 }
 
@@ -182,6 +190,9 @@ Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_table
                        std::vector<int64_t>* failed_tablet_ids) {
     if (sender_id >= _senders_status.size()) {
         LOG(WARNING) << "out of range sender id " << sender_id << "  num " <<  _senders_status.size();
+        std::lock_guard lock_guard(_lock);
+        failed_tablet_ids->insert(failed_tablet_ids->end(), _failed_tablet_ids.begin(),
+                                  _failed_tablet_ids.end());
         return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown sender_id {}", sender_id);
     }
 
@@ -195,9 +206,14 @@ Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_table
         for (auto& it : _index_streams_map) {
             it.second->close(success_tablet_ids, failed_tablet_ids);
         }
+        failed_tablet_ids->insert(failed_tablet_ids->end(), _failed_tablet_ids.begin(),
+                                  _failed_tablet_ids.end());
+        LOG(INFO) << "close load " << *this << ", failed_tablet_num=" << failed_tablet_ids->size()
+                  << ", success_tablet_num=" << success_tablet_ids->size();
+        return Status::OK();
     }
-    failed_tablet_ids->insert(failed_tablet_ids->end(), _failed_tablet_ids.begin(),
-                              _failed_tablet_ids.end());
+
+    // do not return commit info for non-last one.
     return Status::OK();
 }
 
@@ -236,21 +252,30 @@ void LoadStream::_parse_header(butil::IOBuf* const message, PStreamHeader& hdr) 
     LOG(INFO) << "header parse result: " << hdr.DebugString();
 }
 
-Status LoadStream::_append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id, uint32_t segid,
-                              bool eos, butil::IOBuf* data) {
+Status LoadStream::_append_data(const PStreamHeader& header, butil::IOBuf* data) {
     IndexStreamSharedPtr index_stream;
 
+    uint32_t sender_id = header.sender_id();
+    int64_t tablet_id = header.tablet_id();
+    if (sender_id >= _senders_status.size()) {
+        LOG(WARNING) << "out of range sender id " << sender_id << "  num " <<  _senders_status.size();
+        std::lock_guard lock_guard(_lock);
+        _failed_tablet_ids.insert(tablet_id);
+        return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown sender_id {}", sender_id);
+    }
+
+    int64_t index_id = header.index_id();
     auto it = _index_streams_map.find(index_id);
     if (it == _index_streams_map.end()) {
         // TODO ERROR
         LOG(WARNING) << "try to append data to unknown index, index_id " << index_id;
-        _failed_tablet_ids.push_back(tablet_id);
+        _failed_tablet_ids.insert(tablet_id);
         return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown index_id {}", index_id);
     } else {
         index_stream = it->second;
     }
 
-    return index_stream->append_data(sender_id, tablet_id, segid, eos, data);
+    return index_stream->append_data(header, data);
 }
 
 //TODO trigger build meta when last segment of all cluster is closed
@@ -270,7 +295,7 @@ int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[]
         switch (hdr.opcode()) {
         case PStreamHeader::APPEND_DATA:
             {
-                auto st = _append_data(hdr.sender_id(), hdr.index_id(), hdr.tablet_id(), hdr.segment_id(), hdr.segment_eos(), messages[i]);
+                auto st = _append_data(hdr, messages[i]);
                 if (!st.ok()) {
                     std::vector<int64_t> success_tablet_ids;
                     std::vector<int64_t> failed_tablet_ids;
@@ -300,9 +325,17 @@ void LoadStream::on_idle_timeout(StreamId id) {
 }
 
 void LoadStream::on_closed(StreamId id) {
-    if (remove_rpc_stream() == 0) {
+    auto remaining_rpc_stream = remove_rpc_stream();
+    LOG(INFO) << "stream closed " << id << ", remaining_rpc_stream=" << remaining_rpc_stream;
+    if (remaining_rpc_stream == 0) {
         ExecEnv::GetInstance()->get_load_stream_mgr()->clear_load(_id);
     }
+}
+
+inline std::ostream& operator<<(std::ostream& ostr, const LoadStream& load_stream) {
+    ostr << "load_id=" << UniqueId(load_stream._id) << ", txn_id=" << load_stream._txn_id
+         << ", num_senders=" << load_stream._num_senders;
+    return ostr;
 }
 
 } // namespace doris

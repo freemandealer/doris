@@ -36,6 +36,9 @@
 #include "gen_cpp/BackendService_types.h"
 #include "gen_cpp/FrontendService_types.h"
 #include "gtest/gtest_pred_impl.h"
+#include "olap/tablet_manager.h"
+#include "olap/txn_manager.h"
+#include "olap/rowset/beta_rowset.h"
 #include "runtime/descriptor_helper.h"
 #include "runtime/exec_env.h"
 #include "runtime/load_stream_mgr.h"
@@ -52,12 +55,14 @@ const int64_t NORMAL_TABLET_ID = 10000;
 const int64_t ABNORMAL_TABLET_ID = 40000;
 const int64_t NORMAL_INDEX_ID = 50000;
 const int64_t ABNORMAL_INDEX_ID = 60000;
+const int64_t NORMAL_PARTITION_ID = 50000;
 const int64_t SCHEMA_HASH = 90000;
 const uint32_t NORMAL_SENDER_ID = 0;
 const uint32_t ABNORMAL_SENDER_ID = 10000;
+const int64_t NORMAL_TXN_ID = 600001;
 const UniqueId NORMAL_LOAD_ID(1, 1);
 const UniqueId ABNORMAL_LOAD_ID(1, 0);
-std::string EMPTY_STRING;
+std::string ABNORMAL_STRING("abnormal");
 
 void construct_schema(OlapTableSchemaParam* schema) {
     // construct schema
@@ -295,7 +300,7 @@ struct ResponseStat {
     std::vector<int64_t> success_tablet_ids;
     std::vector<int64_t> failed_tablet_ids;
 };
-
+bthread::Mutex g_stat_lock;
 static ResponseStat g_response_stat;
 
 void reset_response_stat() {
@@ -313,6 +318,7 @@ public:
                 butil::IOBufAsZeroCopyInputStream wrapper(*messages[i]);
                 response.ParseFromZeroCopyStream(&wrapper);
                 LOG(INFO) << "response " << response.DebugString();
+                std::lock_guard lock_guard(g_stat_lock);
                 g_response_stat.num++;
                 for (auto& id : response.success_tablet_ids()) {
                     g_response_stat.success_tablet_ids.push_back(id);
@@ -377,7 +383,7 @@ public:
             request.set_allocated_schema(param.to_protobuf());
             // unused
             request.set_index_id(0);
-            request.set_txn_id(600001);
+            request.set_txn_id(NORMAL_TXN_ID);
             // request.set_schema(_parent->_schema->to_protobuf());
             /* for (auto& tablet : _all_tablets) {
                 auto ptablet = request.add_tablets();
@@ -439,7 +445,6 @@ public:
         append_buf.append((char*)&hdr_len, sizeof(size_t));
         append_buf.append(header.SerializeAsString());
         client.send(&append_buf);
-        sleep(1);
     }
 
     void write_one_tablet(MockSinkClient& client, UniqueId load_id, uint32_t sender_id, int64_t index_id, int64_t tablet_id,
@@ -455,30 +460,44 @@ public:
         header.set_segment_id(segid);
         header.set_segment_eos(segment_eos);
         header.set_sender_id(sender_id);
+        header.set_partition_id(NORMAL_PARTITION_ID);
         size_t hdr_len = header.ByteSizeLong();
         append_buf.append((char*)&hdr_len, sizeof(size_t));
         append_buf.append(header.SerializeAsString());
         append_buf.append(data);
+        LOG(INFO) << "send " << header.DebugString() << data;
         client.send(&append_buf);
-        sleep(1);
     }
 
     void write_abnormal_load(MockSinkClient& client) {
-            write_one_tablet(client, ABNORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, EMPTY_STRING, false);
+        write_one_tablet(client, ABNORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, ABNORMAL_STRING, true);
     }
 
     void write_abnormal_index(MockSinkClient& client) {
-        write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, ABNORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+        write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, ABNORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, ABNORMAL_STRING, true);
     }
 
     void write_abnormal_sender(MockSinkClient& client) {
         write_one_tablet(client, NORMAL_LOAD_ID, ABNORMAL_SENDER_ID, NORMAL_INDEX_ID,
-                         NORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+                         NORMAL_TABLET_ID, 0, ABNORMAL_STRING, true);
     }
 
     void write_abnormal_tablet(MockSinkClient& client) {
         write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID,
-                         ABNORMAL_TABLET_ID, 0, EMPTY_STRING, false);
+                         ABNORMAL_TABLET_ID, 0, ABNORMAL_STRING, true);
+    }
+
+    void wait_for_ack(int32_t num) {
+        for (int i = 0; i < 1000 && g_response_stat.num < num; i++) {
+            LOG(INFO) << "waiting ack, current " << g_response_stat.num << ", expected " << num;
+            bthread_usleep(1000);
+        }
+    }
+
+    void wait_for_close() {
+        for (int i = 0; i < 1000 && _env->_load_stream_mgr->get_load_stream_num() != 0; i++) {
+            bthread_usleep(1000);
+        }
     }
 
     void SetUp() override {
@@ -513,10 +532,13 @@ public:
         server_options.idle_timeout_sec = 300;
         CHECK_EQ(0, _server.Start("127.0.0.1:18947", &server_options)); // TODO: make port random
 
-        TCreateTabletReq request;
-        create_tablet_request(NORMAL_TABLET_ID, SCHEMA_HASH, &request);
-        Status res = z_engine->create_tablet(request);
-        EXPECT_EQ(Status::OK(), res);
+        for (int i = 0; i < 3; i++) {
+            TCreateTabletReq request;
+            create_tablet_request(NORMAL_TABLET_ID + i, SCHEMA_HASH, &request);
+            Status res = z_engine->create_tablet(request);
+            EXPECT_EQ(Status::OK(), res);
+        }
+
     }
 
     void TearDown() override {
@@ -525,10 +547,37 @@ public:
             delete z_engine;
             z_engine = nullptr;
         }
-        ExecEnv::destroy(_env);
+        delete _env->_load_stream_mgr;
         _server.Stop(1000);
         CHECK_EQ(0, _server.Join());
         delete _internal_service;
+    }
+
+    std::string read_data(int64_t txn_id, int64_t partition_id, int64_t tablet_id, uint32_t segid) {
+        auto tablet = z_engine->tablet_manager()->get_tablet(tablet_id);
+        std::map<TabletInfo, RowsetSharedPtr> tablet_related_rs;
+        z_engine->txn_manager()->get_txn_related_tablets(txn_id, partition_id,
+                                                         &tablet_related_rs);
+        LOG(INFO) << "get txn related tablet, txn_id=" << txn_id << ", tablet_id=" << tablet_id
+                  << "partition_id=" << partition_id;
+        for (auto& it : tablet_related_rs) {
+            if (it.first.tablet_id != tablet_id) {
+                continue;
+            }
+            auto path = BetaRowset::segment_file_path(it.second->rowset_dir(),
+                                                      it.second->rowset_id(), segid);
+            LOG(INFO) << "read data from " << path;
+            std::ifstream inputFile(path, std::ios::binary);
+            inputFile.seekg(0, std::ios::end);
+            std::streampos file_size = inputFile.tellg();
+            inputFile.seekg(0, std::ios::beg);
+
+            // Read the file contents
+            std::unique_ptr<char[]> buffer = std::make_unique<char[]>(file_size);
+            inputFile.read(buffer.get(), file_size);
+            return std::string(buffer.get(), file_size);
+        }
+        return std::string();
     }
 
     ExecEnv* _env;
@@ -548,11 +597,21 @@ TEST_F(LoadStreamMgrTest, one_client_abnormal_load) {
 
     reset_response_stat();
     close_load(client, 1);
+    wait_for_ack(1);
     EXPECT_EQ(g_response_stat.num, 1);
     EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 1);
+
     close_load(client, 0);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
     EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 1);
     EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 1);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
 TEST_F(LoadStreamMgrTest, one_client_abnormal_index) {
@@ -562,13 +621,31 @@ TEST_F(LoadStreamMgrTest, one_client_abnormal_index) {
 
     reset_response_stat();
     write_abnormal_index(client);
+    wait_for_ack(1);
     EXPECT_EQ(g_response_stat.num, 1);
     EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
     EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
 
     reset_response_stat();
     close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 1);
     EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(2);
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 1);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
 TEST_F(LoadStreamMgrTest, one_client_abnormal_sender) {
@@ -576,9 +653,31 @@ TEST_F(LoadStreamMgrTest, one_client_abnormal_sender) {
     auto st = client.connect_stream();
     EXPECT_TRUE(st.ok());
 
+    reset_response_stat();
     write_abnormal_sender(client);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
 
+    reset_response_stat();
     close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
 TEST_F(LoadStreamMgrTest, one_client_abnormal_tablet) {
@@ -586,15 +685,164 @@ TEST_F(LoadStreamMgrTest, one_client_abnormal_tablet) {
     auto st = client.connect_stream();
     EXPECT_TRUE(st.ok());
 
+    reset_response_stat();
     write_abnormal_tablet(client);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], ABNORMAL_TABLET_ID);
 
+    reset_response_stat();
     close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], ABNORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
-TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet) {
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet_signle_segment0_zero_bytes) {
     MockSinkClient client;
     auto st = client.connect_stream();
     EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data;
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, data, true);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet_signle_segment0) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data = "file1 hello world 123 !@#$%^&*()_+";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, data, false);
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, data, true);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
+
+    auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+    EXPECT_EQ(written_data, data + data);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet_signle_segment_without_eos) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data = "file1 hello world 123 !@#$%^&*()_+";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, data, false);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
+}
+
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet_signle_segment1) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
 
     // append data
     butil::IOBuf append_buf;
@@ -603,26 +851,196 @@ TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet) {
     write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, data, false);
     write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, data, true);
 
+    EXPECT_EQ(g_response_stat.num, 0);
     // CLOSE_LOAD
     close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids[0], NORMAL_TABLET_ID);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
+}
+
+TEST_F(LoadStreamMgrTest, one_client_one_index_one_tablet_two_segment) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data1 = "file1 hello world 123 !@#$%^&*()_+1";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, data1, false);
+    std::string empty;
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0, empty, true);
+    std::string data2 = "file1 hello world 123 !@#$%^&*()_+2";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 1, data2, true);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
+
+    auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+    EXPECT_EQ(written_data, data1);
+
+    written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 1);
+    EXPECT_EQ(written_data, data2);
+ 
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
 TEST_F(LoadStreamMgrTest, one_client_one_index_three_tablet) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
     // append data
-    // eos with data
-    // check data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data1 = "file1 hello world 123 !@#$%^&*()_+1";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID + 0, 0, data1, true);
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID + 1, 0, data1, true);
+    std::string data2 = "file1 hello world 123 !@#$%^&*()_+2";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID + 2, 0, data2, true);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(client, 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(client, 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(client, 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 3);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+    std::set<int64_t> success_tablet_ids;
+    for (auto& id : g_response_stat.success_tablet_ids) {
+        success_tablet_ids.insert(id);
+    }
+    EXPECT_TRUE(success_tablet_ids.count(NORMAL_TABLET_ID));
+    EXPECT_TRUE(success_tablet_ids.count(NORMAL_TABLET_ID + 1));
+    EXPECT_TRUE(success_tablet_ids.count(NORMAL_TABLET_ID + 2));
+
+    auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+    EXPECT_EQ(written_data, data1);
+
+    written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID + 1, 0);
+    EXPECT_EQ(written_data, data1);
+ 
+    written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID + 2, 0);
+    EXPECT_EQ(written_data, data2);
+
+    client.disconnect();
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
-TEST_F(LoadStreamMgrTest, one_client_three_index_three_tablet) {
-    // append data
-    // eos with data
-    // check data
-}
+TEST_F(LoadStreamMgrTest, two_client_one_index_one_tablet_three_segment) {
+    MockSinkClient clients[2];
 
-TEST_F(LoadStreamMgrTest, three_client_three_index_three_tablet) {
-    // append data
-    // eos with data
-    // check data
+    for (int i = 0; i < 2; i++) {
+        auto st = clients[i].connect_stream();
+        EXPECT_TRUE(st.ok());
+    }
+    reset_response_stat();
+
+    std::vector<std::string> segment_data;
+    segment_data.resize(6);
+    // each sender three segments
+    for (int32_t segid = 2; segid >= 0; segid--) {
+        // append data
+        for (int i = 0; i < 2; i++) {
+            butil::IOBuf append_buf;
+            PStreamHeader header;
+            std::string data1 = "sender_id=" + std::to_string(i) + ",segid=" + std::to_string(segid) + "\n";
+            write_one_tablet(clients[i], NORMAL_LOAD_ID, NORMAL_SENDER_ID + i, NORMAL_INDEX_ID, NORMAL_TABLET_ID, segid, data1, true);
+            segment_data[i * 2 + segid] = data1;
+        }
+    }
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD
+    close_load(clients[0], 1);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    // duplicated close
+    close_load(clients[1], 1);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 2);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+
+    close_load(clients[0], 0);
+    wait_for_ack(3);
+    EXPECT_EQ(g_response_stat.num, 3);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 1);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.success_tablet_ids[0], NORMAL_TABLET_ID);
+
+    for (int i = 0; i < segment_data.size(); i++) {
+        auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+        EXPECT_EQ(written_data, segment_data[i]);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        clients[i].disconnect();
+    }
+    wait_for_close();
+    EXPECT_EQ(_env->_load_stream_mgr->get_load_stream_num(), 0);
 }
 
 } // namespace doris

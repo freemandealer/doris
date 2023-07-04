@@ -173,17 +173,17 @@ Status RowsetBuilder::init() {
 
 Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     DCHECK(_is_init);
-    if (segid > _segment_file_writers.size()) {
+    if (segid + 1 > _segment_file_writers.size()) {
         std::lock_guard lock_guard(_lock);
         for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
             Status st;
             io::FileWriterPtr file_writer;
-            st = _rowset_writer->create_file_writer(segid, &file_writer);
+            st = _rowset_writer->create_file_writer(i, &file_writer);
             if (!st.ok()) {
                 _is_canceled = true;
                 return st;
             }
-            LOG(INFO) << " file_writer " << file_writer << "seg id " << segid;
+            LOG(INFO) << " file_writer " << file_writer << "seg id " << i;
             _segment_file_writers.push_back(std::move(file_writer));
         }
     }
@@ -198,7 +198,12 @@ Status RowsetBuilder::close_segment(uint32_t segid) {
     auto st = _segment_file_writers[segid]->close();
     if (!st.ok()) {
         _is_canceled = true;
+        return st;
     }
+    if (_segment_file_writers[segid]->bytes_appended() == 0) {
+        return Status::Corruption("segment {} is zero bytes", segid);
+    }
+    LOG(INFO) << "segid" << segid << "path " << _segment_file_writers[segid]->path() << " write " << _segment_file_writers[segid]->bytes_appended();
     return st;
 }
 
@@ -227,6 +232,13 @@ Status RowsetBuilder::close() {
     if (_is_canceled) {
         return Status::Error<ErrorCode::INTERNAL_ERROR>("flush segment failed");
     }
+
+    for (size_t i = 0; i < _segment_file_writers.size(); i++) {
+        if (!_segment_file_writers[i]->is_closed()) {
+            return Status::Corruption("segment {} is not eos", i);
+        }
+    }
+
     /*
     if (_rowset_writer->num_rows() + _memtable_stat.merged_rows != _total_received_rows) {
         LOG(WARNING) << "the rows number written doesn't match, rowset num rows written to file: "

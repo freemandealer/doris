@@ -40,9 +40,11 @@ public:
 
     Status init(OlapTableSchemaParam* schema, int64_t index_id, int64_t partition_id);
 
-    Status append_data(uint32_t sender_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    Status append_data(const PStreamHeader& header, butil::IOBuf* data);
     Status close();
     int64_t id() { return _id; }
+
+    friend std::ostream& operator<<(std::ostream& ostr, const TabletStream& tablet_stream);
 
 private:
     int64_t _id;
@@ -51,10 +53,11 @@ private:
     std::vector<SegIdMapping> _segids_mapping;
     std::atomic<uint32_t> _next_segid;
     bthread::Mutex _lock;
-    Status _failed_st;
+    std::shared_ptr<Status> _failed_st;
     PUniqueId _load_id;
     int64_t _txn_id;
 };
+
 using TabletStreamSharedPtr = std::shared_ptr<TabletStream>;
 
 class IndexStream {
@@ -64,7 +67,7 @@ public:
             : _id(id), _num_senders(num_senders), _load_id(load_id), _txn_id(txn_id), _schema(schema) {
     }
 
-    Status append_data(uint32_t sender_id, int64_t tablet_id, uint32_t segid, bool eos, butil::IOBuf* data);
+    Status append_data(const PStreamHeader& header, butil::IOBuf* data);
 
     void flush(uint32_t sender_id);
     void close(std::vector<int64_t>* success_tablet_ids, std::vector<int64_t>* failed_tablet_ids);
@@ -101,10 +104,11 @@ public:
     void on_idle_timeout(StreamId id) override;
     void on_closed(StreamId id) override;
 
+    friend std::ostream& operator<<(std::ostream& ostr, const LoadStream& load_stream);
+
 private:
     void _parse_header(butil::IOBuf* const message, PStreamHeader& hdr);
-    Status _append_data(uint32_t sender_id, int64_t index_id, int64_t tablet_id,
-                      uint32_t segid, bool eos, butil::IOBuf* data);
+    Status _append_data(const PStreamHeader& header, butil::IOBuf* data);
     void _report_result(StreamId stream, Status& st, std::vector<int64_t>* success_tablet_ids,
                          std::vector<int64_t>* failed_tablet_ids);
  
@@ -118,7 +122,7 @@ private:
     uint32_t _num_senders;
     int64_t _txn_id;
     std::shared_ptr<OlapTableSchemaParam> _schema;
-    std::vector<int64_t> _failed_tablet_ids;
+    std::set<int64_t> _failed_tablet_ids;
 };
 
 using LoadStreamSharedPtr = std::shared_ptr<LoadStream>;
