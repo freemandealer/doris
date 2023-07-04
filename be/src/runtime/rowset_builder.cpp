@@ -205,6 +205,7 @@ Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatisticsSharedPtr s
         return Status::OK();
     }
     _segment_stat_map[segid] = stat;
+    _rowset_writer->add_segment(segid, *stat);
     if (!st.ok()) {
         _is_canceled = true;
         return st;
@@ -257,8 +258,8 @@ Status RowsetBuilder::close() {
         return Status::InternalError("rows number written by delta writer dosen't match");
     }*/
     // use rowset meta manager to save meta
-    // _cur_rowset = _rowset_writer->build();
-    _cur_rowset = _build_rowset();
+    _cur_rowset = _rowset_writer->build();
+    // _cur_rowset = _build_rowset();
     if (_cur_rowset == nullptr) {
         LOG(WARNING) << "fail to build rowset";
         return Status::Error<MEM_ALLOC_FAILED>();
@@ -363,6 +364,7 @@ RowsetSharedPtr RowsetBuilder::_build_rowset() {
     _rowset_meta->set_empty((num_rows_written) == 0);
     _rowset_meta->set_creation_time(time(nullptr));
     _rowset_meta->set_rowset_state(VISIBLE); //TODO COMMITTED?
+    _rowset_meta->set_rowset_type(RowsetTypePB::BETA_ROWSET);
 
     RowsetSharedPtr rowset;
     st = RowsetFactory::create_rowset(_tablet_schema, _tablet->data_dir()->path(), _rowset_meta,
