@@ -70,8 +70,10 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
     header.set_segment_id(_segment_id);
     header.set_segment_eos(eos);
     header.set_opcode(doris::PStreamHeader::APPEND_DATA);
-    auto stat_pb = stat->to_pb();
-    header.set_allocated_segment_statistics(stat_pb.get());
+    if (stat) {
+        auto stat_pb = stat->to_pb();
+        header.set_allocated_segment_statistics(stat_pb.get());
+    }
 
     size_t header_len = header.ByteSizeLong();
     LOG(INFO) << "OOXXOO header pb: " << header.DebugString();
@@ -100,7 +102,9 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
     stat->data_size = _bytes_appended;
 
     Status status = _stream_sender(buf);
-    header.release_segment_statistics();
+    if (stat) {
+        header.release_segment_statistics();
+    }
     header.release_load_id();
     return status;
 }
