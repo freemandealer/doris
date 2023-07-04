@@ -48,6 +48,7 @@ Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
         _pending_slices.emplace(std::move(data[i]));
     }
     _pending_bytes += bytes_req;
+    _bytes_appended += bytes_req;
 
     LOG(INFO) << "writer appendv, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
@@ -93,7 +94,6 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
         owend_slice.release();
     }
     _pending_bytes -= bytes_req;
-    _bytes_appended += bytes_req;
 
     LOG(INFO) << "writer flushing, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
