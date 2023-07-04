@@ -27,6 +27,7 @@
 namespace doris {
 
 struct RowsetId;
+struct SegmentStatistics;
 
 namespace io {
 class StreamSinkFileWriter : public FileWriter {
@@ -48,6 +49,8 @@ public:
         return Status::OK();
     }
 
+    Status finalize(SegmentStatistics* stat);
+
     Status finalize() override;
 
     Status close() override;
@@ -58,7 +61,7 @@ public:
 
 private:
     Status _stream_sender(butil::IOBuf buf) const { return send_with_retry(_stream, buf); }
-    Status _flush_pending_slices(bool eos);
+    Status _flush_pending_slices(bool eos, SegmentStatistics* stat);
 
 private:
     std::queue<OwnedSlice> _pending_slices;

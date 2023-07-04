@@ -310,6 +310,8 @@ Status BetaRowsetWriterV2::_do_create_segment_writer(
                                                 _context.tablet_schema, _context.tablet,
                                                 _context.data_dir, _context.max_rows_per_segment,
                                                 writer_options, _context.mow_context));
+    (*writer)->set_use_stream_sink_file_writer();
+
     {
         std::lock_guard<SpinLock> l(_lock);
         _file_writers.push_back(std::move(file_writer));

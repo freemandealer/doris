@@ -43,6 +43,8 @@
 #include "olap/rowset/rowset_writer_context.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
+#include "brpc/controller.h"
+#include "brpc/stream.h"
 
 namespace doris {
 namespace vectorized {

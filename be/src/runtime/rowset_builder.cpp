@@ -63,6 +63,7 @@
 #include "util/stopwatch.hpp"
 #include "util/time.h"
 #include "vec/core/block.h"
+#include "olap/rowset/rowset_factory.h"
 
 namespace doris {
 using namespace ErrorCode;
@@ -108,6 +109,7 @@ void RowsetBuilder::_garbage_collection() {
 }
 
 Status RowsetBuilder::init() {
+    _rowset_meta.reset(new RowsetMeta);
     TabletManager* tablet_mgr = _storage_engine->tablet_manager();
     _tablet = tablet_mgr->get_tablet(_context.tablet_id);
     if (_tablet == nullptr) {
@@ -194,8 +196,15 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     return file_writer->append(buf.to_string());
 }
 
-Status RowsetBuilder::close_segment(uint32_t segid) {
+Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatisticsSharedPtr stat) {
     auto st = _segment_file_writers[segid]->close();
+
+    std::lock_guard<std::mutex> l(_segment_stat_map_lock);
+    if (_segment_stat_map.find(segid) != _segment_stat_map.end()) {
+        LOG(WARNING) << "already closed. segid=" << segid;
+        return Status::OK();
+    }
+    _segment_stat_map[segid] = stat;
     if (!st.ok()) {
         _is_canceled = true;
         return st;
@@ -248,7 +257,8 @@ Status RowsetBuilder::close() {
         return Status::InternalError("rows number written by delta writer dosen't match");
     }*/
     // use rowset meta manager to save meta
-    _cur_rowset = _rowset_writer->build();
+    // _cur_rowset = _rowset_writer->build();
+    _cur_rowset = _build_rowset();
     if (_cur_rowset == nullptr) {
         LOG(WARNING) << "fail to build rowset";
         return Status::Error<MEM_ALLOC_FAILED>();
@@ -322,6 +332,46 @@ Status RowsetBuilder::_build_current_tablet_schema(int64_t index_id,
     _tablet_schema->set_partial_update_info(table_schema_param->is_partial_update(),
                                             table_schema_param->partial_update_input_columns());
     return Status::OK();
+}
+
+RowsetSharedPtr RowsetBuilder::_build_rowset() {
+    Status st;
+
+    int64_t num_seg = 0;
+    int64_t num_rows_written = 0;
+    int64_t total_data_size = 0;
+    int64_t total_index_size = 0;
+    std::vector<KeyBoundsPB> segments_encoded_key_bounds;
+
+    for (const auto& itr : _segment_stat_map) {
+        SegmentStatisticsSharedPtr stat = _segment_stat_map[itr.first];
+        num_rows_written += itr.second->row_num;
+        total_data_size += itr.second->data_size;
+        total_index_size += itr.second->index_size;
+        segments_encoded_key_bounds.push_back(itr.second->key_bounds);
+        num_seg ++;
+    }
+
+    // TODO overlapping?
+    _rowset_meta->set_num_segments(num_seg);
+    _rowset_meta->set_num_rows(num_rows_written);
+    _rowset_meta->set_total_disk_size(total_data_size);
+    _rowset_meta->set_data_disk_size(total_data_size);
+    _rowset_meta->set_index_disk_size(total_index_size);
+    _rowset_meta->set_segments_key_bounds(segments_encoded_key_bounds);
+    // TODO write zonemap to meta
+    _rowset_meta->set_empty((num_rows_written) == 0);
+    _rowset_meta->set_creation_time(time(nullptr));
+    _rowset_meta->set_rowset_state(VISIBLE); //TODO COMMITTED?
+
+    RowsetSharedPtr rowset;
+    st = RowsetFactory::create_rowset(_tablet_schema, _tablet->data_dir()->path(), _rowset_meta,
+                                      &rowset);
+    if (st != Status::OK()) {
+        LOG(WARNING) << "fail to create rowset. st=" << st.to_string();
+        return nullptr;
+    }
+    return rowset;
 }
 
 } // namespace doris

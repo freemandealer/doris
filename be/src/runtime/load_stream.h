@@ -29,6 +29,8 @@
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/status.h"
 #include <runtime/rowset_builder.h>
+#include "butil/iobuf.h"
+#include "brpc/stream.h"
 
 namespace doris {
 
@@ -111,7 +113,7 @@ private:
     Status _append_data(const PStreamHeader& header, butil::IOBuf* data);
     void _report_result(StreamId stream, Status& st, std::vector<int64_t>* success_tablet_ids,
                          std::vector<int64_t>* failed_tablet_ids);
- 
+
 private:
     PUniqueId _id;
     std::unordered_map<int64_t, IndexStreamSharedPtr> _index_streams_map;
