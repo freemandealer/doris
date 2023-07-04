@@ -108,7 +108,7 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
          auto st = _rowset_builder->append_data(new_segid, buf);
          if (eos && st.ok()) {
              DCHECK(header.has_segment_statistics());
-             auto stat = std::make_shared<SegmentStatistics>(header.segment_statistics());
+             SegmentStatistics stat(header.segment_statistics());
              st = _rowset_builder->close_segment(new_segid, stat);
          }
 

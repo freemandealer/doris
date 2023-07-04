@@ -196,16 +196,19 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     return file_writer->append(buf.to_string());
 }
 
-Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatisticsSharedPtr stat) {
+Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatistics& stat) {
     auto st = _segment_file_writers[segid]->close();
 
     std::lock_guard<std::mutex> l(_segment_stat_map_lock);
+#if 0
     if (_segment_stat_map.find(segid) != _segment_stat_map.end()) {
         LOG(WARNING) << "already closed. segid=" << segid;
         return Status::OK();
     }
     _segment_stat_map[segid] = stat;
-    _rowset_writer->add_segment(segid, *stat);
+#endif
+
+    _rowset_writer->add_segment(segid, stat);
     if (!st.ok()) {
         _is_canceled = true;
         return st;

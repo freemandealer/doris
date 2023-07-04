@@ -52,12 +52,8 @@ struct SegmentStatistics {
 
     SegmentStatistics() = default;
 
-    SegmentStatistics(SegmentStatisticsPB pb) {
-        row_num = pb.row_num();
-        data_size = pb.data_size();
-        index_size = pb.index_size();
-        key_bounds.CopyFrom(pb.key_bounds());
-    }
+    SegmentStatistics(SegmentStatisticsPB pb) : row_num(pb.row_num()), data_size(pb.data_size()),
+                                                index_size(pb.index_size()), key_bounds(pb.key_bounds()) {}
 
     void to_pb(SegmentStatisticsPB* segstat_pb) {
         segstat_pb->set_row_num(row_num);

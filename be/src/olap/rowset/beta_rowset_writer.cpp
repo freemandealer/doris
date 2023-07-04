@@ -883,6 +883,8 @@ void BetaRowsetWriter::add_segment(uint32_t segid, SegmentStatistics& segstat) {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         CHECK_EQ(_segid_statistics_map.find(segid) == _segid_statistics_map.end(), true);
         _segid_statistics_map.emplace(segid, segstat);
+        uint32_t tmp = _next_segment_id.load();
+        _next_segment_id = std::max(segid, tmp); // TODO
         _segment_num_rows.resize(_next_segment_id);
         _segment_num_rows[segid_offset] = segstat.row_num;
     }
