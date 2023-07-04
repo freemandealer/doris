@@ -275,7 +275,6 @@ Status VOlapTableSinkV2::open(RuntimeState* state) {
     _stream_pool_for_node = std::make_shared<StreamPoolForNode>();
     _node_id_for_stream = std::make_shared<NodeIdForStream>();
     _delta_writer_for_tablet = std::make_shared<DeltaWriterForTablet>();
-    _delta_writer_for_tablet_mutex = std::make_shared<bthread::Mutex>();
     RETURN_IF_ERROR(_init_stream_pools());
 
     return Status::OK();
@@ -442,77 +441,66 @@ Status VOlapTableSinkV2::send(RuntimeState* state, vectorized::Block* input_bloc
 
     // For each tablet, send its rows from block to delta writer
     for (const auto& [tablet_id, rows] : rows_for_tablet) {
-        bthread_t th;
-        auto closure = new WriteMemtableTaskClosure {};
-        closure->sink = this;
-        closure->block = block;
-        closure->tablet_id = tablet_id;
-        closure->partition_id = rows.partition_id;
-        closure->index_id = rows.index_id;
-        closure->row_idxes = rows.row_idxes;
-        RETURN_IF_ERROR(_select_streams(tablet_id, closure->streams));
+        std::vector<brpc::StreamId> streams;
+        RETURN_IF_ERROR(_select_streams(tablet_id, streams));
         _opened_tablets.insert(tablet_id);
         auto cnt = _flying_task_count.fetch_add(1) + 1;
-        VLOG_DEBUG << "Creating WriteMemtableTask for Tablet(tablet id: " << closure->tablet_id
-                   << ", index id: " << closure->index_id << "), flying task count: " << cnt;
-        bthread_start_background(&th, nullptr, _write_memtable_task, closure);
-        _write_memtable_threads.push_back(th);
+        VLOG_DEBUG << "Creating WriteMemtableTask for Tablet(tablet id: " << tablet_id
+                   << ", index id: " << rows.index_id << "), flying task count: " << cnt;
+        RETURN_IF_ERROR(_write_memtable(block, tablet_id, rows, streams));
     }
 
     return Status::OK();
 }
 
-void* VOlapTableSinkV2::_write_memtable_task(void* closure) {
-    auto ctx = static_cast<WriteMemtableTaskClosure*>(closure);
-    VOlapTableSinkV2* sink = ctx->sink;
+Status VOlapTableSinkV2::_write_memtable(std::shared_ptr<vectorized::Block> block,
+                                         int64_t tablet_id, const Rows& rows,
+                                         const std::vector<brpc::StreamId>& streams) {
     DeltaWriterV2* delta_writer = nullptr;
     {
-        std::lock_guard<bthread::Mutex> l(*sink->_delta_writer_for_tablet_mutex);
-        auto it = sink->_delta_writer_for_tablet->find(ctx->tablet_id);
-        if (it == sink->_delta_writer_for_tablet->end()) {
-            VLOG_DEBUG << "Creating DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
-                       << ", index id: " << ctx->index_id << ")";
+        auto it = _delta_writer_for_tablet->find(tablet_id);
+        if (it == _delta_writer_for_tablet->end()) {
+            VLOG_DEBUG << "Creating DeltaWriterV2 for Tablet(tablet id: " << tablet_id
+                       << ", index id: " << rows.index_id << ")";
             DeltaWriterV2::WriteRequest wrequest;
-            wrequest.partition_id = ctx->partition_id;
-            wrequest.index_id = ctx->index_id;
-            wrequest.tablet_id = ctx->tablet_id;
+            wrequest.partition_id = rows.partition_id;
+            wrequest.index_id = rows.index_id;
+            wrequest.tablet_id = tablet_id;
             wrequest.write_type = DeltaWriterV2::WriteType::LOAD;
-            wrequest.txn_id = sink->_txn_id;
-            wrequest.load_id = sink->_load_id;
-            wrequest.tuple_desc = sink->_output_tuple_desc;
-            wrequest.is_high_priority = sink->_is_high_priority;
-            wrequest.table_schema_param = sink->_schema.get();
-            wrequest.tablet_schema = sink->_tablet_schema_for_index[ctx->index_id];
-            wrequest.enable_unique_key_merge_on_write = sink->_enable_unique_mow_for_index[ctx->index_id];
-            for (auto& index : sink->_schema->indexes()) {
-                if (index->index_id == ctx->index_id) {
+            wrequest.txn_id = _txn_id;
+            wrequest.load_id = _load_id;
+            wrequest.tuple_desc = _output_tuple_desc;
+            wrequest.is_high_priority = _is_high_priority;
+            wrequest.table_schema_param = _schema.get();
+            wrequest.tablet_schema = _tablet_schema_for_index[rows.index_id];
+            wrequest.enable_unique_key_merge_on_write = _enable_unique_mow_for_index[rows.index_id];
+            for (auto& index : _schema->indexes()) {
+                if (index->index_id == rows.index_id) {
                     wrequest.slots = &index->slots;
                     wrequest.schema_hash = index->schema_hash;
                     break;
                 }
             }
-            DeltaWriterV2::open(&wrequest, &delta_writer, sink->_profile, sink->_load_id);
-            // sink->_table_sink_v2_mgr->register_writer(std::shared_ptr<DeltaWriterV2>(delta_writer));
-            for (auto stream : ctx->streams) {
+            DeltaWriterV2::open(&wrequest, &delta_writer, _profile, _load_id);
+            // _table_sink_v2_mgr->register_writer(std::shared_ptr<DeltaWriterV2>(delta_writer));
+            for (auto stream : streams) {
                 delta_writer->add_stream(stream);
             }
-            delta_writer->register_flying_memtable_counter(sink->_flying_memtable_counter);
-            sink->_delta_writer_for_tablet->insert(
-                    {ctx->tablet_id, std::unique_ptr<DeltaWriterV2>(delta_writer)});
+            delta_writer->register_flying_memtable_counter(_flying_memtable_counter);
+            _delta_writer_for_tablet->insert(
+                    {tablet_id, std::unique_ptr<DeltaWriterV2>(delta_writer)});
         } else {
-            VLOG_DEBUG << "Reusing DeltaWriterV2 for Tablet(tablet id: " << ctx->tablet_id
-                       << ", index id: " << ctx->index_id << ")";
+            VLOG_DEBUG << "Reusing DeltaWriterV2 for Tablet(tablet id: " << tablet_id
+                       << ", index id: " << rows.index_id << ")";
             delta_writer = it->second.get();
         }
     }
-    // sink->_table_sink_v2_mgr->handle_memtable_flush();
-    auto st = delta_writer->write(ctx->block.get(), ctx->row_idxes, false);
-    auto cnt = sink->_flying_task_count.fetch_sub(1) - 1;
-    VLOG_DEBUG << "Finished writing Tablet(tablet id: " << ctx->tablet_id
-               << ", index id: " << ctx->index_id << "), flying task count: " << cnt;
-    delete ctx;
-    DCHECK_EQ(st, Status::OK()) << "DeltaWriterV2::write failed";
-    return nullptr;
+    // _table_sink_v2_mgr->handle_memtable_flush();
+    auto st = delta_writer->write(block.get(), rows.row_idxes, false);
+    auto cnt = _flying_task_count.fetch_sub(1) - 1;
+    VLOG_DEBUG << "Finished writing Tablet(tablet id: " << tablet_id
+               << ", index id: " << rows.index_id << "), flying task count: " << cnt;
+    return st;
 }
 
 Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
@@ -535,13 +523,6 @@ Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
         COUNTER_SET(_row_distribution_timer, (int64_t)_row_distribution_watch.elapsed_time());
         COUNTER_SET(_filter_timer, _filter_ns);
         COUNTER_SET(_validate_data_timer, _block_convertor->validate_data_ns());
-
-        // join all write memtable tasks
-        for (auto& th : _write_memtable_threads) {
-            if (th) {
-                bthread_join(th, nullptr);
-            }
-        }
 
         // close all delta writers
         if (_delta_writer_for_tablet.use_count() == 1) {
@@ -628,12 +609,6 @@ Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
         LOG(INFO) << "finished to close olap table sink. load_id=" << print_id(_load_id)
                   << ", txn_id=" << _txn_id
                   << ", canceled all node channels due to error: " << status;
-
-        for (auto& th : _write_memtable_threads) {
-            if (th) {
-                bthread_stop(th);
-            }
-        }
     }
 
     _close_status = status;

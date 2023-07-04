@@ -87,16 +87,6 @@ class OlapTableBlockConvertor;
 class OlapTabletFinder;
 class VOlapTableSinkV2;
 
-struct WriteMemtableTaskClosure {
-    VOlapTableSinkV2* sink;
-    std::shared_ptr<vectorized::Block> block;
-    int64_t partition_id;
-    int64_t index_id;
-    int64_t tablet_id;
-    std::vector<int32_t> row_idxes;
-    std::vector<brpc::StreamId> streams;
-};
-
 using DeltaWriterForTablet = std::unordered_map<int64_t, std::unique_ptr<DeltaWriterV2>>;
 using StreamPool = std::vector<brpc::StreamId>;
 using StreamPoolForNode = std::unordered_map<int64_t, StreamPool>;
@@ -159,7 +149,9 @@ private:
     void _generate_rows_for_tablet(RowsForTablet& rows_for_tablet,
                                    const VOlapTablePartition* partition, uint32_t tablet_index,
                                    int row_idx, size_t row_cnt);
-    static void* _write_memtable_task(void* write_ctx);
+
+    Status _write_memtable(std::shared_ptr<vectorized::Block> block, int64_t tablet_id,
+                           const Rows& rows, const std::vector<brpc::StreamId>& streams);
 
     Status _select_streams(int64_t tablet_id, std::vector<brpc::StreamId>& streams);
 
@@ -256,8 +248,6 @@ private:
     std::shared_ptr<NodeIdForStream> _node_id_for_stream;
     size_t _stream_index = 0;
     std::shared_ptr<DeltaWriterForTablet> _delta_writer_for_tablet;
-    std::shared_ptr<bthread::Mutex> _delta_writer_for_tablet_mutex;
-    std::vector<bthread_t> _write_memtable_threads;
     std::atomic<int32_t> _flying_task_count {0};
     std::shared_ptr<std::atomic<int32_t>> _flying_memtable_counter;
 
