@@ -71,6 +71,7 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
     header.set_segment_eos(eos);
     header.set_opcode(doris::PStreamHeader::APPEND_DATA);
     if (stat) {
+        DCHECK(eos);
         stat->to_pb(header.mutable_segment_statistics());
     }
 
