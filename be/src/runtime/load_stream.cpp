@@ -193,9 +193,7 @@ Status LoadStream::init(const POpenStreamSinkRequest* request) {
 }
 
 Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
-                       std::vector<int64_t>* failed_tablet_ids, bool& is_need_ack) {
-    is_need_ack = true;
-
+                       std::vector<int64_t>* failed_tablet_ids) {
     if (sender_id >= _senders_status.size()) {
         LOG(WARNING) << "out of range sender id " << sender_id << "  num " <<  _senders_status.size();
         std::lock_guard lock_guard(_lock);
@@ -209,7 +207,6 @@ Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_table
         LOG(INFO) << fmt::format("OOXXOO {} out of {} stream received CLOSE_LOAD from sender {}",
                                  _senders_closed_streams[sender_id],
                                  _num_stream_per_sender, sender_id);
-        is_need_ack = false;
         return Status::OK();
     }
 
@@ -326,12 +323,8 @@ int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[]
             {
                 std::vector<int64_t> success_tablet_ids;
                 std::vector<int64_t> failed_tablet_ids;
-                bool is_need_ack;
-                auto st = close(hdr.sender_id(), &success_tablet_ids, &failed_tablet_ids,
-                                is_need_ack);
-                if (is_need_ack) {
-                    _report_result(id, st, &success_tablet_ids, &failed_tablet_ids);
-                }
+                auto st = close(hdr.sender_id(), &success_tablet_ids, &failed_tablet_ids);
+                _report_result(id, st, &success_tablet_ids, &failed_tablet_ids);
             }
             break;
         default:

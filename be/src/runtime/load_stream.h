@@ -99,7 +99,7 @@ public:
     uint32_t remove_rpc_stream() { return --_num_rpc_streams; }
 
     Status close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
-               std::vector<int64_t>* failed_tablet_ids, bool& is_need_ack);
+               std::vector<int64_t>* failed_tablet_ids);
 
     // callbacks called by brpc
     int on_received_messages(StreamId id, butil::IOBuf* const messages[], size_t size) override;
