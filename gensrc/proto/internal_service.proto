@@ -691,6 +691,7 @@ message POpenStreamSinkRequest {
     optional int32 backend_id = 4;
     optional POlapTableSchemaParam schema = 5;
     repeated PTabletWithIndex tablets = 6;
+    optional int32 num_stream_per_sender = 7;
 };
 
 message PTabletSchemaWithIndex {

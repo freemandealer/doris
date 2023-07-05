@@ -176,6 +176,9 @@ LoadStream::~LoadStream() {
 Status LoadStream::init(const POpenStreamSinkRequest* request) {
     _num_senders = request->num_senders();
     _num_working_senders = request->num_senders();
+    // TODO: how to ensure the num_stream_per_sender is the same for each sender from different BEs.
+    _num_stream_per_sender = request->num_stream_per_sender();
+    _senders_closed_streams.resize(_num_senders, 0);
     _senders_status.resize(_num_senders, true);
     _txn_id = request->txn_id();
 
@@ -190,13 +193,24 @@ Status LoadStream::init(const POpenStreamSinkRequest* request) {
 }
 
 Status LoadStream::close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
-                       std::vector<int64_t>* failed_tablet_ids) {
+                       std::vector<int64_t>* failed_tablet_ids, bool& is_need_ack) {
+    is_need_ack = true;
+
     if (sender_id >= _senders_status.size()) {
         LOG(WARNING) << "out of range sender id " << sender_id << "  num " <<  _senders_status.size();
         std::lock_guard lock_guard(_lock);
         failed_tablet_ids->insert(failed_tablet_ids->end(), _failed_tablet_ids.begin(),
                                   _failed_tablet_ids.end());
         return Status::Error<ErrorCode::INVALID_ARGUMENT>("unknown sender_id {}", sender_id);
+    }
+
+    // we do nothing until recv CLOSE_LOAD from all stream to ensure all data are handled before ack
+    if ((++_senders_closed_streams[sender_id]) < _num_stream_per_sender) {
+        LOG(INFO) << fmt::format("OOXXOO {} out of {} stream received CLOSE_LOAD from sender {}",
+                                 _senders_closed_streams[sender_id],
+                                 _num_stream_per_sender, sender_id);
+        is_need_ack = false;
+        return Status::OK();
     }
 
     std::lock_guard lock_guard(_lock);
@@ -312,8 +326,12 @@ int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[]
             {
                 std::vector<int64_t> success_tablet_ids;
                 std::vector<int64_t> failed_tablet_ids;
-                auto st = close(hdr.sender_id(), &success_tablet_ids, &failed_tablet_ids);
-                _report_result(id, st, &success_tablet_ids, &failed_tablet_ids);
+                bool is_need_ack;
+                auto st = close(hdr.sender_id(), &success_tablet_ids, &failed_tablet_ids,
+                                is_need_ack);
+                if (is_need_ack) {
+                    _report_result(id, st, &success_tablet_ids, &failed_tablet_ids);
+                }
             }
             break;
         default:

@@ -314,6 +314,7 @@ Status VOlapTableSinkV2::_init_stream_pool(const NodeInfo& node_info, StreamPool
         POpenStreamSinkRequest request;
         request.set_allocated_id(&_load_id);
         request.set_num_senders(_num_senders);
+        request.set_num_stream_per_sender(config::stream_cnt_per_sink);
         request.set_txn_id(_txn_id);
         request.set_backend_id(node_info.id);
         request.set_allocated_schema(_schema->to_protobuf());

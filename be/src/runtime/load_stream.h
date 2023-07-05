@@ -99,7 +99,7 @@ public:
     uint32_t remove_rpc_stream() { return --_num_rpc_streams; }
 
     Status close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
-               std::vector<int64_t>* failed_tablet_ids);
+               std::vector<int64_t>* failed_tablet_ids, bool& is_need_ack);
 
     // callbacks called by brpc
     int on_received_messages(StreamId id, butil::IOBuf* const messages[], size_t size) override;
@@ -119,8 +119,10 @@ private:
     std::unordered_map<int64_t, IndexStreamSharedPtr> _index_streams_map;
     std::atomic<uint32_t> _num_rpc_streams;
     std::vector<bool> _senders_status;
+    std::vector<uint32_t> _senders_closed_streams;
     bthread::Mutex _lock;
     uint32_t _num_working_senders;
+    uint32_t _num_stream_per_sender;
     uint32_t _num_senders;
     int64_t _txn_id;
     std::shared_ptr<OlapTableSchemaParam> _schema;
