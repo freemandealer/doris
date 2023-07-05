@@ -446,9 +446,6 @@ Status VOlapTableSinkV2::send(RuntimeState* state, vectorized::Block* input_bloc
     for (const auto& [tablet_id, rows] : rows_for_tablet) {
         std::vector<brpc::StreamId> streams;
         RETURN_IF_ERROR(_select_streams(tablet_id, streams));
-        auto cnt = _flying_task_count.fetch_add(1) + 1;
-        VLOG_DEBUG << "Creating WriteMemtableTask for Tablet(tablet id: " << tablet_id
-                   << ", index id: " << rows.index_id << "), flying task count: " << cnt;
         RETURN_IF_ERROR(_write_memtable(block, tablet_id, rows, streams));
     }
 
@@ -500,14 +497,10 @@ Status VOlapTableSinkV2::_write_memtable(std::shared_ptr<vectorized::Block> bloc
     }
     // _table_sink_v2_mgr->handle_memtable_flush();
     auto st = delta_writer->write(block.get(), rows.row_idxes, false);
-    auto cnt = _flying_task_count.fetch_sub(1) - 1;
-    VLOG_DEBUG << "Finished writing Tablet(tablet id: " << tablet_id
-               << ", index id: " << rows.index_id << "), flying task count: " << cnt;
     return st;
 }
 
 Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
-    LOG(INFO) << "Closing VOlapTableSinkV2, flying task count: " << _flying_task_count;
     if (_closed) {
         return _close_status;
     }
