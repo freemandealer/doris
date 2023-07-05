@@ -32,8 +32,8 @@ struct SegmentStatistics;
 namespace io {
 class StreamSinkFileWriter : public FileWriter {
 public:
-    StreamSinkFileWriter(brpc::StreamId stream);
-    ~StreamSinkFileWriter() override;
+    StreamSinkFileWriter(int sender_id, brpc::StreamId stream_id)
+            : _sender_id(sender_id), _stream(stream_id) {}
 
     static void deleter(void* data) { ::free(data); }
 
@@ -68,6 +68,7 @@ private:
     size_t _max_pending_bytes = config::streamsink_filewriter_batchsize;
     size_t _pending_bytes;
 
+    int _sender_id;
     brpc::StreamId _stream;
 
     PUniqueId _load_id;

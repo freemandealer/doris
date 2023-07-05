@@ -475,6 +475,7 @@ Status VOlapTableSinkV2::_write_memtable(std::shared_ptr<vectorized::Block> bloc
             wrequest.table_schema_param = _schema.get();
             wrequest.tablet_schema = _tablet_schema_for_index[rows.index_id];
             wrequest.enable_unique_key_merge_on_write = _enable_unique_mow_for_index[rows.index_id];
+            wrequest.sender_id = _sender_id;
             for (auto& index : _schema->indexes()) {
                 if (index->index_id == rows.index_id) {
                     wrequest.slots = &index->slots;
@@ -620,6 +621,7 @@ Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
 Status VOlapTableSinkV2::_close_load(brpc::StreamId stream) {
     butil::IOBuf buf;
     PStreamHeader header;
+    header.set_sender_id(_sender_id);
     header.set_allocated_load_id(&_load_id);
     header.set_opcode(doris::PStreamHeader::CLOSE_LOAD);
     size_t header_len = header.ByteSizeLong();

@@ -143,6 +143,7 @@ Status DeltaWriterV2::init() {
     context.data_dir = nullptr;
     context.tablet_uid = tablet->tablet_uid();
     context.rowset_dir = tablet->tablet_path();
+    context.sender_id = _req.sender_id;
 
     _rowset_writer = std::make_unique<BetaRowsetWriterV2>(_streams);
     _rowset_writer->init(context);

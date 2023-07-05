@@ -25,10 +25,6 @@
 namespace doris {
 namespace io {
 
-StreamSinkFileWriter::StreamSinkFileWriter(brpc::StreamId stream_id) : _stream(stream_id) {}
-
-StreamSinkFileWriter::~StreamSinkFileWriter() {}
-
 void StreamSinkFileWriter::init(PUniqueId load_id, int64_t partition_id, int64_t index_id,
                                 int64_t tablet_id, int32_t segment_id) {
     LOG(INFO) << "init stream writer, load id(" << UniqueId(load_id).to_string()
@@ -64,6 +60,7 @@ Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
 
 Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* stat) {
     PStreamHeader header;
+    header.set_sender_id(_sender_id);
     header.set_allocated_load_id(&_load_id);
     header.set_partition_id(_partition_id);
     header.set_index_id(_index_id);
