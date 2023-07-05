@@ -143,6 +143,8 @@ int StreamSinkHandler::on_received_messages(brpc::StreamId id, butil::IOBuf* con
                 }
             }
         }
+
+        _sink->_pending_reports.fetch_add(-1);
     }
     return 0;
 }
@@ -444,7 +446,6 @@ Status VOlapTableSinkV2::send(RuntimeState* state, vectorized::Block* input_bloc
     for (const auto& [tablet_id, rows] : rows_for_tablet) {
         std::vector<brpc::StreamId> streams;
         RETURN_IF_ERROR(_select_streams(tablet_id, streams));
-        _opened_tablets.insert(tablet_id);
         auto cnt = _flying_task_count.fetch_add(1) + 1;
         VLOG_DEBUG << "Creating WriteMemtableTask for Tablet(tablet id: " << tablet_id
                    << ", index id: " << rows.index_id << "), flying task count: " << cnt;
@@ -544,29 +545,10 @@ Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
             }
         }
 
-        for (const auto& tablet : _opened_tablets) {
-            bool should_wait = true;
-            while (should_wait) {
-                int success_replicas;
-                int failed_replicas;
-                {
-                    std::lock_guard<bthread::Mutex> l(_tablet_success_map_mutex);
-                    success_replicas = _tablet_success_map[tablet].size();
-                }
-                {
-                    std::lock_guard<bthread::Mutex> l(_tablet_failure_map_mutex);
-                    failed_replicas = _tablet_failure_map[tablet].size();
-                }
-                LOG(INFO) << "expected " << _num_replicas << " replicas for tablet " << tablet
-                          << ", got " << success_replicas << " success replicas, "
-                          << failed_replicas << " failed replicas";
-                should_wait = success_replicas + failed_replicas < _num_replicas &&
-                              failed_replicas * 2 < _num_replicas;
-                if (should_wait) {
-                    // TODO: use a better wait
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-            }
+        while (_pending_reports.load() > 0) {
+            // TODO: use a better wait
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            LOG(INFO) << "sinkv2 close_wait, pending reports: " << _pending_reports.load();
         }
 
         // close streams
@@ -627,6 +609,7 @@ Status VOlapTableSinkV2::_close_load(brpc::StreamId stream) {
     size_t header_len = header.ByteSizeLong();
     buf.append(reinterpret_cast<uint8_t*>(&header_len), sizeof(header_len));
     buf.append(header.SerializeAsString());
+    _pending_reports.fetch_add(1);
     io::StreamSinkFileWriter::send_with_retry(stream, buf);
     header.release_load_id();
     return Status::OK();

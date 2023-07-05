@@ -251,7 +251,7 @@ private:
     std::atomic<int32_t> _flying_task_count {0};
     std::shared_ptr<std::atomic<int32_t>> _flying_memtable_counter;
 
-    std::unordered_set<int64_t> _opened_tablets;
+    std::atomic<int> _pending_reports {0};
 
     std::unordered_map<int64_t, std::vector<int64_t>> _tablet_success_map;
     std::unordered_map<int64_t, std::vector<int64_t>> _tablet_failure_map;
