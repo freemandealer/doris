@@ -109,8 +109,8 @@ int StreamSinkHandler::on_received_messages(brpc::StreamId id, butil::IOBuf* con
         Status st(response.status());
 
         std::stringstream ss;
-        ss << "received write stream sink response from backend " << backend_id << ", status: "
-           << st << ", success tablet ids:";
+        ss << "received write stream sink response from backend " << backend_id
+           << ", status: " << st << ", success tablet ids:";
         for (auto tablet_id : response.success_tablet_ids()) {
             ss << " " << tablet_id;
         }
@@ -336,13 +336,11 @@ Status VOlapTableSinkV2::_init_stream_pool(const NodeInfo& node_info, StreamPool
             _enable_unique_mow_for_index.insert(
                     {resp.index_id(), resp.enable_unique_key_merge_on_write()});
             // TODO: this is a debug log
-            LOG(INFO) << "Got tablet schema from backend "
-                    << node_info.id << ": num_short_key_columns = "
-                    << tablet_schema->num_short_key_columns()
-                    << ", num_rows_per_row_block = "
-                    << tablet_schema->num_rows_per_row_block()
-                    << ", enable_unique_key_merge_on_write = "
-                    << resp.enable_unique_key_merge_on_write();
+            LOG(INFO) << "Got tablet schema from backend " << node_info.id
+                      << ": num_short_key_columns = " << tablet_schema->num_short_key_columns()
+                      << ", num_rows_per_row_block = " << tablet_schema->num_rows_per_row_block()
+                      << ", enable_unique_key_merge_on_write = "
+                      << resp.enable_unique_key_merge_on_write();
         }
         request.release_id();
         request.release_schema();
@@ -523,7 +521,6 @@ Status VOlapTableSinkV2::close(RuntimeState* state, Status exec_status) {
         // close all delta writers
         if (_delta_writer_for_tablet.use_count() == 1) {
             for (const auto& entry : *_delta_writer_for_tablet) {
-
                 entry.second->close();
             }
             for (const auto& entry : *_delta_writer_for_tablet) {

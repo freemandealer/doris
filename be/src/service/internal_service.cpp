@@ -81,6 +81,7 @@
 #include "runtime/fold_constant_executor.h"
 #include "runtime/fragment_mgr.h"
 #include "runtime/load_channel_mgr.h"
+#include "runtime/load_stream_mgr.h"
 #include "runtime/result_buffer_mgr.h"
 #include "runtime/routine_load/routine_load_task_executor.h"
 #include "runtime/stream_load/new_load_stream_mgr.h"
@@ -116,7 +117,6 @@
 #include "vec/exec/format/parquet/vparquet_reader.h"
 #include "vec/jsonb/serialize.h"
 #include "vec/runtime/vdata_stream_mgr.h"
-#include "runtime/load_stream_mgr.h"
 
 namespace google {
 namespace protobuf {

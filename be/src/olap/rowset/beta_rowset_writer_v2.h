@@ -34,6 +34,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "brpc/controller.h"
+#include "brpc/stream.h"
 #include "common/status.h"
 #include "io/fs/file_reader_writer_fwd.h"
 #include "olap/olap_common.h"
@@ -43,8 +45,6 @@
 #include "olap/rowset/rowset_writer_context.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
-#include "brpc/controller.h"
-#include "brpc/stream.h"
 
 namespace doris {
 namespace vectorized {

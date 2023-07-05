@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <brpc/stream.h>
 #include <gen_cpp/Types_types.h>
 #include <gen_cpp/internal_service.pb.h>
 #include <gen_cpp/types.pb.h>
@@ -28,8 +29,6 @@
 #include <shared_mutex>
 #include <unordered_set>
 #include <vector>
-
-#include <brpc/stream.h>
 
 #include "common/status.h"
 #include "olap/memtable.h"
