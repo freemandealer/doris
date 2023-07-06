@@ -122,6 +122,8 @@ private:
     std::unordered_map<uint32_t/*segid*/, SegmentStatisticsSharedPtr> _segment_stat_map;
     std::mutex _segment_stat_map_lock;
     std::unordered_map<uint32_t, io::FileWriterPtr> _segment_file_writers;
+    // for lockless, do we really need it?
+    std::atomic<uint32_t> _num_segment_file_writers = 0;
 };
 
 using RowsetBuilderSharedPtr = std::shared_ptr<RowsetBuilder>;

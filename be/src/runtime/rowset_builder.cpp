@@ -175,7 +175,7 @@ Status RowsetBuilder::init() {
 
 Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     DCHECK(_is_init);
-    if (segid + 1 > _segment_file_writers.size()) {
+    if (segid + 1 > _num_segment_file_writers) {
         std::lock_guard lock_guard(_lock);
         for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
             Status st;
@@ -188,6 +188,7 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
             LOG(INFO) << " file_writer " << file_writer << "seg id " << i;
             _segment_file_writers[i] = std::move(file_writer);
         }
+        _num_segment_file_writers = _segment_file_writers.size();
     }
 
     // TODO: IOBuf to Slice
