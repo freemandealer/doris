@@ -59,8 +59,7 @@ namespace doris {
 using namespace ErrorCode;
 
 BetaRowsetWriterV2::BetaRowsetWriterV2(const std::vector<brpc::StreamId>& streams)
-        : _rowset_meta(nullptr),
-          _next_segment_id(0),
+        : _next_segment_id(0),
           _num_segment(0),
           _segment_writer(nullptr),
           _num_rows_written(0),
@@ -80,26 +79,6 @@ BetaRowsetWriterV2::~BetaRowsetWriterV2() {
 
 Status BetaRowsetWriterV2::init(const RowsetWriterContext& rowset_writer_context) {
     _context = rowset_writer_context;
-    _rowset_meta.reset(new RowsetMeta);
-    _rowset_meta->set_rowset_id(_context.rowset_id);
-    _rowset_meta->set_partition_id(_context.partition_id);
-    _rowset_meta->set_tablet_id(_context.tablet_id);
-    _rowset_meta->set_tablet_schema_hash(_context.tablet_schema_hash);
-    _rowset_meta->set_rowset_type(_context.rowset_type);
-    _rowset_meta->set_rowset_state(_context.rowset_state);
-    _rowset_meta->set_segments_overlap(_context.segments_overlap);
-    if (_context.rowset_state == PREPARED || _context.rowset_state == COMMITTED) {
-        _is_pending = true;
-        _rowset_meta->set_txn_id(_context.txn_id);
-        _rowset_meta->set_load_id(_context.load_id);
-    } else {
-        _rowset_meta->set_version(_context.version);
-        _rowset_meta->set_newest_write_timestamp(_context.newest_write_timestamp);
-    }
-    // TODO: invalid tablet uid
-    //_rowset_meta->set_tablet_uid(_context.tablet_uid);
-    _rowset_meta->set_tablet_schema(_context.tablet_schema);
-
     return Status::OK();
 }
 
@@ -255,11 +234,11 @@ Status BetaRowsetWriterV2::_do_create_segment_writer(
                                  ? flush_ctx->segment_id.value()
                                  : allocate_segment_id();
     io::FileWriterPtr file_writer;
-    auto partition_id = _rowset_meta->partition_id();
+    auto partition_id = _context.partition_id;
     auto sender_id = _context.sender_id;
     auto index_id = _context.index_id;
-    auto tablet_id = _rowset_meta->tablet_id();
-    auto load_id = _rowset_meta->load_id();
+    auto tablet_id = _context.tablet_id;
+    auto load_id = _context.load_id;
     auto stream_id = *_streams.begin();
 
     auto stream_writer = std::make_unique<io::StreamSinkFileWriter>(sender_id, stream_id);

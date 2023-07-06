@@ -142,7 +142,6 @@ private:
 
 protected:
     RowsetWriterContext _context;
-    std::shared_ptr<RowsetMeta> _rowset_meta;
 
     std::atomic<int32_t> _next_segment_id; // the next available segment_id (offset),
                                            // also the numer of allocated segments
