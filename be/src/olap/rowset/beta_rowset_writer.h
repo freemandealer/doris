@@ -60,6 +60,13 @@ namespace vectorized::schema_util {
 class LocalSchemaChangeRecorder;
 }
 
+struct SegmentStatistics {
+    int64_t row_num;
+    int64_t data_size;
+    int64_t index_size;
+    KeyBoundsPB key_bounds;
+};
+
 class BetaRowsetWriter : public RowsetWriter {
     friend class SegcompactionWorker;
 
@@ -77,9 +84,9 @@ public:
 
     Status add_rowset_for_linked_schema_change(RowsetSharedPtr rowset) override;
 
-    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) override;
+    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer);
 
-    void add_segment(uint32_t segid, SegmentStatistics& segstat) override;
+    void add_segment(uint32_t segid, SegmentStatistics& segstat);
 
     Status flush() override;
 
@@ -138,7 +145,6 @@ private:
 
     Status _create_file_writer(std::string path, io::FileWriterPtr* file_writer);
     Status _create_file_writer(uint32_t begin, uint32_t end, io::FileWriterPtr* writer);
-
     Status _do_create_segment_writer(std::unique_ptr<segment_v2::SegmentWriter>* writer,
                                      bool is_segcompaction, int64_t begin, int64_t end,
                                      const FlushContext* ctx = nullptr);

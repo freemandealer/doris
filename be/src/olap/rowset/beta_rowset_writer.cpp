@@ -777,13 +777,13 @@ Status BetaRowsetWriter::create_file_writer(uint32_t segment_id, io::FileWriterP
     return _create_file_writer(path, file_writer);
 }
 
-Status BetaRowsetWriter::_create_file_writer(uint32_t begin, uint32_t end, io::FileWriterPtr* file_writer) {
+Status BetaRowsetWriter::_create_file_writer(uint32_t begin, uint32_t end,
+                                             io::FileWriterPtr* file_writer) {
     std::string path;
-    DCHECK(begin >= 0 && end >= 0);
     path = BetaRowset::local_segment_path_segcompacted(_context.rowset_dir, _context.rowset_id,
                                                        begin, end);
     return _create_file_writer(path, file_writer);
- }
+}
 
 Status BetaRowsetWriter::_do_create_segment_writer(
         std::unique_ptr<segment_v2::SegmentWriter>* writer, bool is_segcompaction, int64_t begin,
@@ -807,7 +807,6 @@ Status BetaRowsetWriter::_do_create_segment_writer(
         return st;
     }
 
-    DCHECK(file_writer != nullptr);
     segment_v2::SegmentWriterOptions writer_options;
     writer_options.enable_unique_key_merge_on_write = _context.enable_unique_key_merge_on_write;
     writer_options.rowset_ctx = &_context;
