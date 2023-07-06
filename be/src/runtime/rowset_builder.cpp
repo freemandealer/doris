@@ -175,24 +175,26 @@ Status RowsetBuilder::init() {
 
 Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     DCHECK(_is_init);
-    if (segid + 1 > _num_segment_file_writers) {
+    io::FileWriter *file_writer = nullptr;
+    {
         std::lock_guard lock_guard(_lock);
-        for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
-            Status st;
-            io::FileWriterPtr file_writer;
-            st = _rowset_writer->create_file_writer(i, &file_writer);
-            if (!st.ok()) {
-                _is_canceled = true;
-                return st;
+        if (segid + 1 > _segment_file_writers.size()) {
+            for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
+                Status st;
+                io::FileWriterPtr file_writer;
+                st = _rowset_writer->create_file_writer(i, &file_writer);
+                if (!st.ok()) {
+                    _is_canceled = true;
+                    return st;
+                }
+                LOG(INFO) << " file_writer " << file_writer << "seg id " << i;
+                _segment_file_writers[i] = std::move(file_writer);
             }
-            LOG(INFO) << " file_writer " << file_writer << "seg id " << i;
-            _segment_file_writers[i] = std::move(file_writer);
         }
-        _num_segment_file_writers = _segment_file_writers.size();
-    }
 
-    // TODO: IOBuf to Slice
-    auto& file_writer = _segment_file_writers[segid];
+        // TODO: IOBuf to Slice
+        file_writer = _segment_file_writers[segid].get();
+    }
     LOG(INFO) << " file_writer " << file_writer << "seg id " << segid;
     return file_writer->append(buf.to_string());
 }
