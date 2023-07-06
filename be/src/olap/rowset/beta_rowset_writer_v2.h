@@ -134,11 +134,6 @@ private:
                                   const FlushContext* ctx = nullptr);
     Status _flush_segment_writer(std::unique_ptr<segment_v2::SegmentWriter>* writer,
                                  int64_t* flush_size = nullptr);
-    void _build_rowset_meta(std::shared_ptr<RowsetMeta> rowset_meta);
-
-    void _build_rowset_meta_with_spec_field(RowsetMetaSharedPtr rowset_meta,
-                                            const RowsetMetaSharedPtr& spec_rowset_meta);
-    bool _is_segment_overlapping(const std::vector<KeyBoundsPB>& segments_encoded_key_bounds);
 
 protected:
     RowsetWriterContext _context;
