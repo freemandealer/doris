@@ -96,7 +96,8 @@ Status BetaRowsetWriterV2::init(const RowsetWriterContext& rowset_writer_context
         _rowset_meta->set_version(_context.version);
         _rowset_meta->set_newest_write_timestamp(_context.newest_write_timestamp);
     }
-    _rowset_meta->set_tablet_uid(_context.tablet_uid);
+    // TODO: invalid tablet uid
+    //_rowset_meta->set_tablet_uid(_context.tablet_uid);
     _rowset_meta->set_tablet_schema(_context.tablet_schema);
 
     return Status::OK();
@@ -197,6 +198,7 @@ RowsetSharedPtr BetaRowsetWriterV2::build() {
     }
 
     RowsetSharedPtr rowset;
+    // TODO: invalid rowset dir
     auto status = RowsetFactory::create_rowset(_context.tablet_schema, _context.rowset_dir,
                                                _rowset_meta, &rowset);
     if (!status.ok()) {
@@ -283,11 +285,9 @@ void BetaRowsetWriterV2::_build_rowset_meta(std::shared_ptr<RowsetMeta> rowset_m
 Status BetaRowsetWriterV2::_do_create_segment_writer(
         std::unique_ptr<segment_v2::SegmentWriter>* writer, int64_t begin, int64_t end,
         const FlushContext* flush_ctx) {
-    std::string path;
     int32_t segment_id = (flush_ctx != nullptr && flush_ctx->segment_id.has_value())
                                  ? flush_ctx->segment_id.value()
                                  : allocate_segment_id();
-    path = BetaRowset::segment_file_path(_context.rowset_dir, _context.rowset_id, segment_id);
     io::FileWriterPtr file_writer;
     auto partition_id = _rowset_meta->partition_id();
     auto sender_id = _context.sender_id;

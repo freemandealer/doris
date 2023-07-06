@@ -118,9 +118,6 @@ DeltaWriterV2::~DeltaWriterV2() {
 }
 
 Status DeltaWriterV2::init() {
-    TabletManager* tablet_mgr = _storage_engine->tablet_manager();
-    // TODO: remove tablet
-    auto tablet = tablet_mgr->get_tablet(_req.tablet_id);
     // build tablet schema in request level
     _build_current_tablet_schema(_req.index_id, _req.table_schema_param, *_req.tablet_schema.get());
     RowsetWriterContext context;
@@ -141,8 +138,6 @@ Status DeltaWriterV2::init() {
     context.rowset_type = RowsetTypePB::BETA_ROWSET;
     context.rowset_id = StorageEngine::instance()->next_rowset_id();
     context.data_dir = nullptr;
-    context.tablet_uid = tablet->tablet_uid();
-    context.rowset_dir = tablet->tablet_path();
     context.sender_id = _req.sender_id;
 
     _rowset_writer = std::make_unique<BetaRowsetWriterV2>(_streams);
