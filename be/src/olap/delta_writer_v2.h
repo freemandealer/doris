@@ -151,7 +151,6 @@ private:
     bool _is_closed = false;
     Status _cancel_status;
     WriteRequest _req;
-    RowsetSharedPtr _cur_rowset;
     std::unique_ptr<BetaRowsetWriterV2> _rowset_writer;
     // TODO: Recheck the lifetime of _mem_table, Look should use unique_ptr
     std::unique_ptr<MemTable> _mem_table;

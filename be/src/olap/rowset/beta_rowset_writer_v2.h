@@ -87,7 +87,7 @@ public:
     Status flush_single_memtable(const vectorized::Block* block, int64_t* flush_size,
                                  const FlushContext* ctx = nullptr) override;
 
-    RowsetSharedPtr build() override;
+    RowsetSharedPtr build() override { return nullptr; };
 
     RowsetSharedPtr manual_build(const RowsetMetaSharedPtr& rowset_meta) override {
         LOG(FATAL) << "not implemeted";

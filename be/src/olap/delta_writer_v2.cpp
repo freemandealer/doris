@@ -52,7 +52,6 @@
 #include "olap/schema_change.h"
 #include "olap/storage_engine.h"
 #include "olap/tablet_manager.h"
-#include "olap/txn_manager.h"
 #include "runtime/exec_env.h"
 #include "runtime/load_channel_mgr.h"
 #include "runtime/memory/mem_tracker.h"
@@ -76,7 +75,6 @@ Status DeltaWriterV2::open(WriteRequest* req, DeltaWriterV2** writer, RuntimePro
 DeltaWriterV2::DeltaWriterV2(WriteRequest* req, StorageEngine* storage_engine,
                              RuntimeProfile* profile, const UniqueId& load_id)
         : _req(*req),
-          _cur_rowset(nullptr),
           _rowset_writer(nullptr),
           _tablet_schema(new TabletSchema),
           _delta_written_success(false),
@@ -364,15 +362,6 @@ Status DeltaWriterV2::close_wait() {
                      << ", merged_rows: " << _memtable_stat.merged_rows
                      << ", total received rows: " << _total_received_rows;
         return Status::InternalError("rows number written by delta writer dosen't match");
-    }
-    {
-        SCOPED_TIMER(_rowset_build_timer);
-        // use rowset meta manager to save meta
-        _cur_rowset = _rowset_writer->build();
-    }
-    if (_cur_rowset == nullptr) {
-        LOG(WARNING) << "fail to build rowset";
-        return Status::Error<MEM_ALLOC_FAILED>();
     }
 
     _delta_written_success = true;

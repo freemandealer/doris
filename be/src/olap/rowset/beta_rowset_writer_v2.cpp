@@ -175,40 +175,6 @@ Status BetaRowsetWriterV2::flush_single_memtable(const vectorized::Block* block,
     return Status::OK();
 }
 
-RowsetSharedPtr BetaRowsetWriterV2::build() {
-    // make sure all segments are flushed
-    DCHECK_EQ(_num_segment, _next_segment_id);
-    // TODO(lingbin): move to more better place, or in a CreateBlockBatch?
-    for (auto& file_writer : _file_writers) {
-        Status status = file_writer->close();
-        if (!status.ok()) {
-            LOG(WARNING) << "failed to close file writer, path=" << file_writer->path()
-                         << " res=" << status;
-            return nullptr;
-        }
-    }
-
-    // When building a rowset, we must ensure that the current _segment_writer has been
-    // flushed, that is, the current _segment_writer is nullptr
-    DCHECK(_segment_writer == nullptr) << "segment must be null when build rowset";
-    _build_rowset_meta(_rowset_meta);
-
-    if (_rowset_meta->newest_write_timestamp() == -1) {
-        _rowset_meta->set_newest_write_timestamp(UnixSeconds());
-    }
-
-    RowsetSharedPtr rowset;
-    // TODO: invalid rowset dir
-    auto status = RowsetFactory::create_rowset(_context.tablet_schema, _context.rowset_dir,
-                                               _rowset_meta, &rowset);
-    if (!status.ok()) {
-        LOG(WARNING) << "rowset init failed when build new rowset, res=" << status;
-        return nullptr;
-    }
-    _already_built = true;
-    return rowset;
-}
-
 bool BetaRowsetWriterV2::_is_segment_overlapping(
         const std::vector<KeyBoundsPB>& segments_encoded_key_bounds) {
     std::string last;
