@@ -322,9 +322,13 @@ Status VOlapTableSinkV2::_init_stream_pool(const NodeInfo& node_info, StreamPool
         request.set_allocated_schema(_schema->to_protobuf());
         for (const auto& partition : _vpartition->get_partitions()) {
             for (const auto& index : partition->indexes) {
-                auto req = request.add_tablets();
-                req->set_tablet_id(index.tablets[0]);
-                req->set_index_id(index.index_id);
+                auto tablet_id = index.tablets[0];
+                auto nodes = _location->find_tablet(tablet_id)->node_ids;
+                if (std::find(nodes.begin(), nodes.end(), node_info.id) != nodes.end()) {
+                    auto req = request.add_tablets();
+                    req->set_tablet_id(tablet_id);
+                    req->set_index_id(index.index_id);
+                }
             }
         }
         POpenStreamSinkResponse response;
