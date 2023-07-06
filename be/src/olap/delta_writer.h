@@ -202,8 +202,6 @@ private:
     RuntimeProfile::Counter* _merged_rows_num = nullptr;
 
     MonotonicStopWatch _lock_watch;
-
-    MemTableStat _memtable_stat;
 };
 
 } // namespace doris
