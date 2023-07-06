@@ -188,7 +188,7 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
                     return st;
                 }
                 LOG(INFO) << " file_writer " << file_writer << "seg id " << i;
-                _segment_file_writers[i] = std::move(file_writer);
+                _segment_file_writers.push_back(std::move(file_writer));
             }
         }
 

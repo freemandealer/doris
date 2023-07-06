@@ -121,7 +121,7 @@ private:
     std::shared_ptr<RowsetMeta> _rowset_meta;
     std::unordered_map<uint32_t/*segid*/, SegmentStatisticsSharedPtr> _segment_stat_map;
     std::mutex _segment_stat_map_lock;
-    std::unordered_map<uint32_t, io::FileWriterPtr> _segment_file_writers;
+    std::vector<io::FileWriterPtr> _segment_file_writers;
 };
 
 using RowsetBuilderSharedPtr = std::shared_ptr<RowsetBuilder>;
