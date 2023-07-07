@@ -32,8 +32,8 @@ struct SegmentStatistics;
 namespace io {
 class StreamSinkFileWriter : public FileWriter {
 public:
-    StreamSinkFileWriter(int sender_id, brpc::StreamId stream_id)
-            : _sender_id(sender_id), _stream(stream_id) {}
+    StreamSinkFileWriter(int sender_id, std::vector<brpc::StreamId> stream_id)
+            : _sender_id(sender_id), _streams(stream_id) {}
 
     static void deleter(void* data) { ::free(data); }
 
@@ -60,7 +60,13 @@ public:
     Status write_at(size_t offset, const Slice& data) override;
 
 private:
-    Status _stream_sender(butil::IOBuf buf) const { return send_with_retry(_stream, buf); }
+    Status _stream_sender(butil::IOBuf buf) const {
+        for (auto stream : _streams) {
+            RETURN_IF_ERROR(send_with_retry(stream, buf));
+        }
+        return Status::OK();
+    }
+
     Status _flush_pending_slices(bool eos, SegmentStatistics* stat);
 
 private:
@@ -69,7 +75,7 @@ private:
     size_t _pending_bytes;
 
     int _sender_id;
-    brpc::StreamId _stream;
+    std::vector<brpc::StreamId> _streams;
 
     PUniqueId _load_id;
     int64_t _partition_id;

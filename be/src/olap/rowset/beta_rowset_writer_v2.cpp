@@ -166,9 +166,8 @@ Status BetaRowsetWriterV2::_do_create_segment_writer(
     auto index_id = _context.index_id;
     auto tablet_id = _context.tablet_id;
     auto load_id = _context.load_id;
-    auto stream_id = *_streams.begin();
 
-    auto stream_writer = std::make_unique<io::StreamSinkFileWriter>(sender_id, stream_id);
+    auto stream_writer = std::make_unique<io::StreamSinkFileWriter>(sender_id, _streams);
     stream_writer->init(load_id, partition_id, index_id, tablet_id, segment_id);
     file_writer = std::move(stream_writer);
 
