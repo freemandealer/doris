@@ -41,6 +41,7 @@
 #include "olap/rowset/rowset_meta.h"
 #include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/rowset_writer_context.h"
+#include "olap/rowset/segment_flusher.h"
 #include "segcompaction.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
@@ -61,9 +62,9 @@ class LocalSchemaChangeRecorder;
 }
 
 struct SegmentStatistics {
-    int64_t row_num;
-    int64_t data_size;
-    int64_t index_size;
+    int64_t row_num = 0;
+    int64_t data_size = 0;
+    int64_t index_size = 0;
     KeyBoundsPB key_bounds;
 };
 
@@ -103,7 +104,7 @@ public:
 
     Version version() override { return _context.version; }
 
-    int64_t num_rows() const override { return _raw_num_rows_written; }
+    int64_t num_rows() const override { return _segment_writer.num_rows(); }
 
     RowsetId rowset_id() override { return _context.rowset_id; }
 
@@ -115,7 +116,7 @@ public:
         return Status::OK();
     }
 
-    int32_t allocate_segment_id() override { return _next_segment_id.fetch_add(1); };
+    int32_t allocate_segment_id() override { return _segment_writer.allocate_segment_id(); };
 
     SegcompactionWorker& get_segcompaction_worker() { return _segcompaction_worker; }
 
@@ -128,8 +129,8 @@ public:
     Status wait_flying_segcompaction() override;
 
     void set_segment_start_id(int32_t start_id) override {
+        _segment_writer.set_segment_start_id(start_id);
         _segment_start_id = start_id;
-        _next_segment_id = start_id;
     }
 
     int64_t delete_bitmap_ns() override { return _delete_bitmap_ns; }
@@ -137,22 +138,8 @@ public:
     int64_t segment_writer_ns() override { return _segment_writer_ns; }
 
 private:
-    Status _add_rows(const vectorized::Block* block,
-                     std::unique_ptr<segment_v2::SegmentWriter>& segment_writer, size_t row_offset,
-                     size_t input_row_num);
-    Status _add_block(const vectorized::Block* block,
-                      std::unique_ptr<segment_v2::SegmentWriter>& writer);
-
     Status _create_file_writer(std::string path, io::FileWriterPtr* file_writer);
     Status _check_segment_number_limit();
-    Status _create_segment_writer(std::unique_ptr<segment_v2::SegmentWriter>& writer,
-                                  int32_t segment_id, bool no_compression = false,
-                                  TabletSchemaSPtr flush_schema = nullptr);
-    Status _flush_segment_writer(std::unique_ptr<segment_v2::SegmentWriter>& writer,
-                                 int64_t* flush_size = nullptr);
-    Status _flush_single_block(const vectorized::Block* block, int32_t segment_id,
-                               int64_t* flush_size = nullptr,
-                               TabletSchemaSPtr flush_schema = nullptr);
     Status _generate_delete_bitmap(int32_t segment_id);
     void _build_rowset_meta(std::shared_ptr<RowsetMeta> rowset_meta);
 
@@ -192,19 +179,13 @@ protected:
     RowsetWriterContext _context;
     std::shared_ptr<RowsetMeta> _rowset_meta;
 
-    std::atomic<int32_t> _next_segment_id; // the next available segment_id (offset),
-                                           // also the numer of allocated segments
-    std::atomic<int32_t> _num_segment;     // number of consecutive flushed segments
-    roaring::Roaring _segment_set;         // bitmap set to record flushed segment id
-    std::mutex _segment_set_mutex;         // mutex for _segment_set
-    int32_t _segment_start_id; //basic write start from 0, partial update may be different
+    std::atomic<int32_t> _num_segment; // number of consecutive flushed segments
+    roaring::Roaring _segment_set;     // bitmap set to record flushed segment id
+    std::mutex _segment_set_mutex;     // mutex for _segment_set
+    int32_t _segment_start_id;         // basic write start from 0, partial update may be different
     std::atomic<int32_t> _segcompacted_point; // segemnts before this point have
                                               // already been segment compacted
     std::atomic<int32_t> _num_segcompacted;   // index for segment compaction
-    /// When flushing the memtable in the load process, we do not use this writer but an independent writer.
-    /// Because we want to flush memtables in parallel.
-    /// In other processes, such as merger or schema change, we will use this unified writer for data writing.
-    std::unique_ptr<segment_v2::SegmentWriter> _segment_writer;
 
     mutable SpinLock _lock; // protect following vectors.
     // record rows number of every segment already written, using for rowid
@@ -220,15 +201,13 @@ protected:
     std::atomic<int64_t> _total_index_size;
     // TODO rowset Zonemap
 
-    // written rows by add_block/add_row (not effected by segcompaction)
-    std::atomic<int64_t> _raw_num_rows_written;
-
     std::map<uint32_t, SegmentStatistics> _segid_statistics_map;
     std::mutex _segid_statistics_map_mutex;
 
     bool _is_pending = false;
     bool _already_built = false;
 
+    BetaRowsetSegmentWriter _segment_writer;
     SegcompactionWorker _segcompaction_worker;
 
     // ensure only one inflight segcompaction task for each rowset

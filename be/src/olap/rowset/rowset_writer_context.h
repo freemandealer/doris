@@ -95,6 +95,7 @@ struct RowsetWriterContext {
             nullptr;
 
     std::shared_ptr<MowContext> mow_context;
+    std::function<Status(uint32_t, io::FileWriterPtr*)> create_file_writer;
 };
 
 } // namespace doris
