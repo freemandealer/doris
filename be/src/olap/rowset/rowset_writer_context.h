@@ -30,6 +30,8 @@ class RowsetWriterContextBuilder;
 using RowsetWriterContextBuilderSharedPtr = std::shared_ptr<RowsetWriterContextBuilder>;
 class DataDir;
 class Tablet;
+class FileWriterCreator;
+class SegmentCollector;
 namespace vectorized::schema_util {
 class LocalSchemaChangeRecorder;
 }
@@ -95,7 +97,8 @@ struct RowsetWriterContext {
             nullptr;
 
     std::shared_ptr<MowContext> mow_context;
-    std::function<Status(uint32_t, io::FileWriterPtr&)> create_file_writer;
+    std::shared_ptr<FileWriterCreator> file_writer_creator;
+    std::shared_ptr<SegmentCollector> segment_collector;
 };
 
 } // namespace doris

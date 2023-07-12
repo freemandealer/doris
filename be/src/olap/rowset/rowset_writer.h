@@ -106,7 +106,7 @@ public:
                 "RowsetWriter not support flush_single_block");
     }
 
-    virtual void add_segment(uint32_t segid, SegmentStatistics& segstat) = 0;
+    virtual Status add_segment(uint32_t segid, SegmentStatistics& segstat) = 0;
 
     // finish building and return pointer to the built rowset (guaranteed to be inited).
     // return nullptr when failed

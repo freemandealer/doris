@@ -67,7 +67,6 @@ BetaRowsetWriter::BetaRowsetWriter()
           _num_rows_written(0),
           _total_data_size(0),
           _total_index_size(0),
-          _segment_writer([this](uint32_t segid, SegmentStatistics& stat) { add_segment(segid, stat); }),
           _segcompaction_worker(this),
           _is_doing_segcompaction(false) {
     _segcompaction_status.store(OK);
@@ -123,9 +122,8 @@ Status BetaRowsetWriter::init(const RowsetWriterContext& rowset_writer_context) 
     _rowset_meta->set_tablet_schema(_context.tablet_schema);
     _context.schema_change_recorder =
             std::make_shared<vectorized::schema_util::LocalSchemaChangeRecorder>();
-    _context.create_file_writer = [this](uint32_t segid, io::FileWriterPtr& file_writer) {
-        return create_file_writer(segid, file_writer);
-    };
+    _context.segment_collector = std::make_shared<SegmentCollectorT<BetaRowsetWriter>>(this);
+    _context.file_writer_creator = std::make_shared<FileWriterCreatorT<BetaRowsetWriter>>(this);
     _segment_writer.init(_context);
     return Status::OK();
 }
@@ -741,7 +739,7 @@ Status BetaRowsetWriter::_check_segment_number_limit() {
     return Status::OK();
 }
 
-void BetaRowsetWriter::add_segment(uint32_t segid, SegmentStatistics& segstat) {
+Status BetaRowsetWriter::add_segment(uint32_t segid, SegmentStatistics& segstat) {
     uint32_t segid_offset = segid - _segment_start_id;
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
@@ -763,6 +761,7 @@ void BetaRowsetWriter::add_segment(uint32_t segid, SegmentStatistics& segstat) {
             _num_segment++;
         }
     }
+    return Status::OK();
 }
 
 Status BetaRowsetWriter::flush_segment_writer_for_segcompaction(
