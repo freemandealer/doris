@@ -43,6 +43,7 @@ public:
     Status init(OlapTableSchemaParam* schema, int64_t index_id, int64_t partition_id);
 
     Status append_data(const PStreamHeader& header, butil::IOBuf* data);
+    Status add_segment(const PStreamHeader& header, butil::IOBuf* data);
     Status close();
     int64_t id() { return _id; }
 

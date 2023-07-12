@@ -35,7 +35,6 @@
 #include "gutil/macros.h"
 #include "gutil/strings/substitute.h"
 #include "olap/olap_define.h"
-#include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/segment_v2/column_writer.h"
 #include "olap/tablet.h"
 #include "olap/tablet_schema.h"
@@ -58,7 +57,6 @@ class ShortKeyIndexBuilder;
 class PrimaryKeyIndexBuilder;
 class KeyCoder;
 struct RowsetWriterContext;
-struct FlushContext;
 
 namespace io {
 class FileWriter;
@@ -89,11 +87,10 @@ public:
                            std::shared_ptr<MowContext> mow_context);
     ~SegmentWriter();
 
-    Status init(const FlushContext* flush_ctx = nullptr);
+    Status init();
 
     // for vertical compaction
-    Status init(const std::vector<uint32_t>& col_ids, bool has_key,
-                const FlushContext* flush_ctx = nullptr);
+    Status init(const std::vector<uint32_t>& col_ids, bool has_key);
 
     template <typename RowType>
     Status append_row(const RowType& row);
@@ -133,9 +130,6 @@ public:
     void set_mow_context(std::shared_ptr<MowContext> mow_context);
     Status fill_missing_columns(vectorized::MutableColumns& mutable_full_columns,
                                 const std::vector<bool>& use_default_flag, bool has_default);
-
-    void set_use_stream_sink_file_writer() { _use_stream_sink_file_writer = true; }
-    bool get_use_stream_sink_file_writer() { return _use_stream_sink_file_writer; }
 
 private:
     DISALLOW_COPY_AND_ASSIGN(SegmentWriter);
@@ -177,7 +171,6 @@ private:
 
     // Not owned. owned by RowsetWriter
     io::FileWriter* _file_writer;
-    bool _use_stream_sink_file_writer = false;
 
     SegmentFooterPB _footer;
     size_t _num_key_columns;

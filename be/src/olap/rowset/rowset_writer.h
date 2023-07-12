@@ -34,20 +34,10 @@
 
 namespace doris {
 
-class MemTable;
-
-// Context for single memtable flush
-struct FlushContext {
-    ENABLE_FACTORY_CREATOR(FlushContext);
-    TabletSchemaSPtr flush_schema = nullptr;
-    const vectorized::Block* block = nullptr;
-    std::optional<int32_t> segment_id = std::nullopt;
-};
-
 struct SegmentStatistics {
-    int64_t row_num;
-    int64_t data_size;
-    int64_t index_size;
+    int64_t row_num = 0;
+    int64_t data_size = 0;
+    int64_t index_size = 0;
     KeyBoundsPB key_bounds;
 
     SegmentStatistics() = default;
@@ -86,19 +76,16 @@ public:
         return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>();
     }
 
-    virtual Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) {
-        return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>();
-    }
-
-    virtual void add_segment(uint32_t segid, SegmentStatistics& segstat) {
-        CHECK(false);
-    }
-
     // Precondition: the input `rowset` should have the same type of the rowset we're building
     virtual Status add_rowset(RowsetSharedPtr rowset) = 0;
 
     // Precondition: the input `rowset` should have the same type of the rowset we're building
     virtual Status add_rowset_for_linked_schema_change(RowsetSharedPtr rowset) = 0;
+
+    virtual Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) {
+        return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>(
+                "RowsetWriter not support create_file_writer");
+    }
 
     // explicit flush all buffered rows into segment file.
     // note that `add_row` could also trigger flush when certain conditions are met
@@ -108,10 +95,18 @@ public:
     }
     virtual Status final_flush() { return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>(); }
 
-    virtual Status flush_single_memtable(const vectorized::Block* block, int64_t* flush_size,
-                                         const FlushContext* ctx = nullptr) {
-        return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>();
+    virtual Status flush_memtable(vectorized::Block* block, int32_t segment_id,
+                                  int64_t* flush_size) {
+        return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>(
+                "RowsetWriter not support flush_memtable");
     }
+
+    virtual Status flush_single_block(const vectorized::Block* block) {
+        return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>(
+                "RowsetWriter not support flush_single_block");
+    }
+
+    virtual void add_segment(uint32_t segid, SegmentStatistics& segstat) = 0;
 
     // finish building and return pointer to the built rowset (guaranteed to be inited).
     // return nullptr when failed
@@ -140,10 +135,9 @@ public:
 
     virtual void set_segment_start_id(int num_segment) { LOG(FATAL) << "not supported!"; }
 
-    virtual vectorized::schema_util::LocalSchemaChangeRecorder*
-    mutable_schema_change_recorder() = 0;
-
     virtual int64_t delete_bitmap_ns() { return 0; }
+
+    virtual int64_t segment_writer_ns() { return 0; }
 
 private:
     DISALLOW_COPY_AND_ASSIGN(RowsetWriter);

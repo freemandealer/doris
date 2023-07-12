@@ -44,8 +44,6 @@ public:
 
     Status appendv(const Slice* data, size_t data_cnt) override;
 
-    Status finalize(SegmentStatistics* stat);
-
     Status finalize() override;
 
     Status close() override;

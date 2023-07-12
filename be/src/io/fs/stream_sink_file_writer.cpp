@@ -20,7 +20,7 @@
 #include <gen_cpp/internal_service.pb.h>
 
 #include "olap/olap_common.h"
-#include "olap/rowset/rowset_writer.h"
+#include "olap/rowset/beta_rowset_writer.h"
 
 namespace doris {
 namespace io {
@@ -71,6 +71,7 @@ Status StreamSinkFileWriter::appendv(const Slice* data, size_t data_cnt) {
     return Status::OK();
 }
 
+
 Status StreamSinkFileWriter::finalize(SegmentStatistics* stat) {
     LOG(INFO) << "writer finalize, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
@@ -105,10 +106,6 @@ Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf
             return Status::OK();
         }
     }
-}
-
-Status StreamSinkFileWriter::finalize() {
-    return Status::OK();
 }
 
 Status StreamSinkFileWriter::abort() {
