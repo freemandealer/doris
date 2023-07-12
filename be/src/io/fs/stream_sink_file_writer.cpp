@@ -62,7 +62,6 @@ Status StreamSinkFileWriter::appendv(const Slice* data, size_t data_cnt) {
     if (_pending_bytes >= _max_pending_bytes) {
         RETURN_IF_ERROR(_stream_sender(_buf));
         _buf.clear();
-        LOG(INFO) << "buf size "<<_buf.size();
         _append_header();
         _pending_bytes =0;
     }
@@ -72,15 +71,18 @@ Status StreamSinkFileWriter::appendv(const Slice* data, size_t data_cnt) {
 }
 
 
-Status StreamSinkFileWriter::finalize(SegmentStatistics* stat) {
+Status StreamSinkFileWriter::finalize() {
     LOG(INFO) << "writer finalize, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id;
     // TODO(zhengyu): update get_inverted_index_file_size into stat
+    Status status = _stream_sender(_buf);
+    // send eos
+    _buf.clear();
     _header.set_segment_eos(true);
-    stat->to_pb(_header.mutable_segment_statistics());
     _append_header();
-    return _stream_sender(_buf);
+    status = _stream_sender(_buf);
+    return status;
 }
 
 void StreamSinkFileWriter::_append_header() {
