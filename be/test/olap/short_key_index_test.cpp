@@ -40,7 +40,7 @@ TEST_F(ShortKeyIndexTest, builder) {
         builder.add_item(std::to_string(i));
         num_items++;
     }
-    std::vector<OwnedSlice> slices;
+    std::vector<Slice> slices;
     segment_v2::PageFooterPB footer;
     auto st = builder.finalize(9000 * 1024, &slices, &footer);
     EXPECT_TRUE(st.ok());
@@ -49,7 +49,7 @@ TEST_F(ShortKeyIndexTest, builder) {
 
     std::string buf;
     for (auto& slice : slices) {
-        buf.append(slice.slice().data, slice.slice().size);
+        buf.append(slice.data, slice.size);
     }
 
     ShortKeyIndexDecoder decoder;

@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "gtest/gtest_pred_impl.h"
-#include "util/faststring.h"
 #include "util/slice.h"
 
 namespace doris {
@@ -72,13 +71,7 @@ TEST(CRC, Values) {
 TEST(CRC, Extend) {
     EXPECT_EQ(Value("hello world", 11), Extend(Value("hello ", 6), "world", 5));
 
-    std::vector<OwnedSlice> slices;
-    faststring str;
-    str.assign_copy("hello ");
-    slices.emplace_back(str.build());
-    str.clear();
-    str.assign_copy("world");
-    slices.emplace_back(str.build());
+    std::vector<Slice> slices = {Slice("hello "), Slice("world")};
     EXPECT_EQ(Value("hello world", 11), Value(slices));
 }
 

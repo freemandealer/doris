@@ -42,12 +42,7 @@ public:
     void init(PUniqueId load_id, int64_t partition_id, int64_t index_id, int64_t tablet_id,
               int32_t segment_id);
 
-    Status appendv(OwnedSlice* data, size_t data_cnt) override;
-
-    virtual Status appendv(const Slice* data, size_t data_cnt) override {
-        CHECK(false);
-        return Status::OK();
-    }
+    Status appendv(const Slice* data, size_t data_cnt) override;
 
     Status finalize() override;
 
@@ -60,15 +55,22 @@ public:
 private:
     Status _stream_sender(butil::IOBuf buf) const {
         for (auto stream : _streams) {
+            LOG(INFO) << "writer flushing, load_id: " << UniqueId(_load_id).to_string()
+              << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
+              << ", segment_id: " << _segment_id << ", stream id: " << stream << ", buf size: " << buf.size();
+      
             RETURN_IF_ERROR(send_with_retry(stream, buf));
         }
         return Status::OK();
     }
 
-    Status _flush_pending_slices(bool eos);
+    void _append_header();
 
 private:
-    std::queue<OwnedSlice> _pending_slices;
+    PStreamHeader _header;
+    butil::IOBuf _buf;
+
+    std::queue<Slice> _pending_slices;
     size_t _max_pending_bytes = config::streamsink_filewriter_batchsize;
     size_t _pending_bytes;
 
