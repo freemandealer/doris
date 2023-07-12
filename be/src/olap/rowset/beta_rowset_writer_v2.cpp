@@ -92,6 +92,32 @@ Status BetaRowsetWriterV2::create_file_writer(uint32_t segment_id, io::FileWrite
     return Status::OK();
 }
 
+void BetaRowsetWriterV2::add_segment(uint32_t segment_id, SegmentStatistics& segstat) {
+    auto partition_id = _context.partition_id;
+    auto sender_id = _context.sender_id;
+    auto index_id = _context.index_id;
+    auto tablet_id = _context.tablet_id;
+    auto load_id = _context.load_id;
+
+    butil::IOBuf buf;
+    PStreamHeader header;
+    header.set_sender_id(sender_id);
+    header.set_allocated_load_id(&load_id);
+    header.set_partition_id(partition_id);
+    header.set_index_id(index_id);
+    header.set_tablet_id(tablet_id);
+    header.set_segment_id(segment_id);
+    header.set_opcode(doris::PStreamHeader::ADD_SEGMENT);
+    segstat.to_pb(header.mutable_segment_statistics());
+    size_t header_len = header.ByteSizeLong();
+    buf.append(reinterpret_cast<uint8_t*>(&header_len), sizeof(header_len));
+    buf.append(header.SerializeAsString());
+    for (const auto& stream : _streams) {
+        io::StreamSinkFileWriter::send_with_retry(stream, buf);
+    }
+    header.release_load_id();
+}
+
 Status BetaRowsetWriterV2::flush_memtable(vectorized::Block* block, int32_t segment_id,
                                           int64_t* flush_size) {
     if (block->rows() == 0) {
