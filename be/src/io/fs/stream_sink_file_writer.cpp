@@ -20,7 +20,7 @@
 #include <gen_cpp/internal_service.pb.h>
 
 #include "olap/olap_common.h"
-#include "olap/rowset/rowset_writer.h"
+#include "olap/rowset/beta_rowset_writer.h"
 
 namespace doris {
 namespace io {
@@ -51,14 +51,14 @@ Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
               << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
 
     if (_pending_bytes >= _max_pending_bytes) {
-        RETURN_IF_ERROR(_flush_pending_slices(false, nullptr));
+        RETURN_IF_ERROR(_flush_pending_slices(false));
     }
 
     LOG(INFO) << "current batched bytes: " << _pending_bytes;
     return Status::OK();
 }
 
-Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* stat) {
+Status StreamSinkFileWriter::_flush_pending_slices(bool eos) {
     PStreamHeader header;
     header.set_sender_id(_sender_id);
     header.set_allocated_load_id(&_load_id);
@@ -68,10 +68,6 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
     header.set_segment_id(_segment_id);
     header.set_segment_eos(eos);
     header.set_opcode(doris::PStreamHeader::APPEND_DATA);
-    if (stat) {
-        DCHECK(eos);
-        stat->to_pb(header.mutable_segment_statistics());
-    }
 
     size_t header_len = header.ByteSizeLong();
     LOG(INFO) << "OOXXOO header pb: " << header.DebugString();
@@ -101,12 +97,12 @@ Status StreamSinkFileWriter::_flush_pending_slices(bool eos, SegmentStatistics* 
     return status;
 }
 
-Status StreamSinkFileWriter::finalize(SegmentStatistics* stat) {
+Status StreamSinkFileWriter::finalize() {
     LOG(INFO) << "writer finalize, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id;
     // TODO(zhengyu): update get_inverted_index_file_size into stat
-    return _flush_pending_slices(true, stat);
+    return _flush_pending_slices(true);
 }
 
 Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf buf) {
@@ -126,10 +122,6 @@ Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf
             return Status::OK();
         }
     }
-}
-
-Status StreamSinkFileWriter::finalize() {
-    return Status::OK();
 }
 
 Status StreamSinkFileWriter::abort() {

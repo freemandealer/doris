@@ -199,7 +199,7 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
     return file_writer->append(buf.to_string());
 }
 
-Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatistics& stat) {
+Status RowsetBuilder::close_segment(uint32_t segid) {
     auto st = _segment_file_writers[segid]->close();
 
     std::lock_guard<std::mutex> l(_segment_stat_map_lock);
@@ -210,8 +210,6 @@ Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatistics& stat) {
     }
     _segment_stat_map[segid] = stat;
 #endif
-
-    _rowset_writer->add_segment(segid, stat);
     if (!st.ok()) {
         _is_canceled = true;
         return st;
@@ -220,7 +218,12 @@ Status RowsetBuilder::close_segment(uint32_t segid, SegmentStatistics& stat) {
         return Status::Corruption("segment {} is zero bytes", segid);
     }
     LOG(INFO) << "segid" << segid << "path " << _segment_file_writers[segid]->path() << " write " << _segment_file_writers[segid]->bytes_appended();
-    return st;
+    return Status::OK();
+}
+
+Status RowsetBuilder::add_segment(uint32_t segid, SegmentStatistics& stat) {
+    _rowset_writer->add_segment(segid, stat);
+    return Status::OK();
 }
 
 void RowsetBuilder::add_segments(std::vector<SegmentStatistics>& segstats) {

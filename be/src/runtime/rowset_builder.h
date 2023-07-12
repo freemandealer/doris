@@ -76,7 +76,8 @@ public:
     Status init();
 
     Status append_data(uint32_t segid, butil::IOBuf buf);
-    Status close_segment(uint32_t segid, SegmentStatistics& stat);
+    Status close_segment(uint32_t segid);
+    Status add_segment(uint32_t segid, SegmentStatistics& stat);
 
     void add_segments(std::vector<SegmentStatistics>& segstat);
 

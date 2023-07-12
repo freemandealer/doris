@@ -120,8 +120,6 @@ public:
 
     int64_t tablet_id() { return _tablet->tablet_id(); }
 
-    int32_t schema_hash() { return _tablet->schema_hash(); }
-
     void finish_slave_tablet_pull_rowset(int64_t node_id, bool is_succeed);
 
     int64_t total_received_rows() const { return _total_received_rows; }
@@ -202,8 +200,6 @@ private:
     RuntimeProfile::Counter* _merged_rows_num = nullptr;
 
     MonotonicStopWatch _lock_watch;
-
-    MemTableStat _memtable_stat;
 };
 
 } // namespace doris

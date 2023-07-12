@@ -49,8 +49,6 @@ public:
         return Status::OK();
     }
 
-    Status finalize(SegmentStatistics* stat);
-
     Status finalize() override;
 
     Status close() override;
@@ -67,7 +65,7 @@ private:
         return Status::OK();
     }
 
-    Status _flush_pending_slices(bool eos, SegmentStatistics* stat);
+    Status _flush_pending_slices(bool eos);
 
 private:
     std::queue<OwnedSlice> _pending_slices;

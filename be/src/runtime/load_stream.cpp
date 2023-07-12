@@ -70,6 +70,11 @@ Status TabletStream::init(OlapTableSchemaParam* schema, int64_t index_id, int64_
 Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
     // TODO failed early
 
+    // dispatch add_segment request
+    if (header.opcode() == PStreamHeader::ADD_SEGMENT) {
+        return add_segment(header, data);
+    }
+
     uint32_t sender_id = header.sender_id();
     // We don't need a lock protecting _segids_mapping, because it is written once.
     if(sender_id >= _segids_mapping.size()) {
@@ -108,17 +113,26 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
     auto flush_func = [this, new_segid, eos, buf, header]() {
          auto st = _rowset_builder->append_data(new_segid, buf);
          if (eos && st.ok()) {
-             DCHECK(header.has_segment_statistics());
-             SegmentStatistics stat(header.segment_statistics());
-             st = _rowset_builder->close_segment(new_segid, stat);
+             st = _rowset_builder->close_segment(new_segid);
          }
-
          if (!st.ok() && _failed_st->ok()) {
              _failed_st = std::make_shared<Status>(st);
              LOG(INFO) << "write data failed " << *this;
          }
     };
     return _flush_tokens[segid % _flush_tokens.size()]->submit_func(flush_func);
+}
+
+Status TabletStream::add_segment(const PStreamHeader& header, butil::IOBuf* data) {
+    DCHECK(header.has_segment_statistics());
+    SegmentStatistics stat(header.segment_statistics());
+
+    uint32_t sender_id = header.sender_id();
+    uint32_t segid = header.segment_id();
+    uint32_t new_segid = _segids_mapping[sender_id][segid];
+    DCHECK(new_segid != std::numeric_limits<uint32_t>::max());
+
+    return _rowset_builder->add_segment(new_segid, stat);
 }
 
 Status TabletStream::close() {
@@ -308,6 +322,7 @@ int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[]
 
         // step 2: dispatch
         switch (hdr.opcode()) {
+        case PStreamHeader::ADD_SEGMENT: // ADD_SEGMENT will be dispatched inside TabletStream
         case PStreamHeader::APPEND_DATA:
             {
                 auto st = _append_data(hdr, messages[i]);
