@@ -81,7 +81,7 @@ public:
         return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>();
     }
 
-    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) override;
+    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr& writer) override;
 
     Status flush() override {
         return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>();

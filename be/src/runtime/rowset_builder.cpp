@@ -182,7 +182,7 @@ Status RowsetBuilder::append_data(uint32_t segid, butil::IOBuf buf) {
             for (size_t i = _segment_file_writers.size(); i <= segid; i++) {
                 Status st;
                 io::FileWriterPtr file_writer;
-                st = _rowset_writer->create_file_writer(i, &file_writer);
+                st = _rowset_writer->create_file_writer(i, file_writer);
                 if (!st.ok()) {
                     _is_canceled = true;
                     return st;

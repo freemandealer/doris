@@ -110,7 +110,7 @@ Status SegmentFlusher::_create_segment_writer(std::unique_ptr<segment_v2::Segmen
                                               int32_t segment_id, bool no_compression,
                                               TabletSchemaSPtr flush_schema) {
     io::FileWriterPtr file_writer;
-    RETURN_IF_ERROR(_context.create_file_writer(segment_id, &file_writer));
+    RETURN_IF_ERROR(_context.create_file_writer(segment_id, file_writer));
 
     segment_v2::SegmentWriterOptions writer_options;
     writer_options.enable_unique_key_merge_on_write = _context.enable_unique_key_merge_on_write;
