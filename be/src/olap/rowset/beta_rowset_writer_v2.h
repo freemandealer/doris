@@ -115,7 +115,7 @@ public:
         return Status::OK();
     }
 
-    void add_segment(uint32_t segment_id, SegmentStatistics& segstat) override;
+    Status add_segment(uint32_t segment_id, SegmentStatistics& segstat) override;
 
     int32_t allocate_segment_id() override { return _next_segment_id.fetch_add(1); };
 

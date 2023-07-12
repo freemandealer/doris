@@ -64,17 +64,14 @@ BetaRowsetWriterV2::BetaRowsetWriterV2(const std::vector<brpc::StreamId>& stream
           _num_rows_written(0),
           _total_data_size(0),
           _total_index_size(0),
-          _segment_writer(
-                  [this](uint32_t segid, SegmentStatistics& stat) { add_segment(segid, stat); }),
           _streams(streams) {}
 
 BetaRowsetWriterV2::~BetaRowsetWriterV2() = default;
 
 Status BetaRowsetWriterV2::init(const RowsetWriterContext& rowset_writer_context) {
     _context = rowset_writer_context;
-    _context.create_file_writer = [this](uint32_t segid, io::FileWriterPtr& file_writer) {
-        return create_file_writer(segid, file_writer);
-    };
+    _context.segment_collector = std::make_shared<SegmentCollectorT<BetaRowsetWriterV2>>(this);
+    _context.file_writer_creator = std::make_shared<FileWriterCreatorT<BetaRowsetWriterV2>>(this);
     _segment_writer.init(_context);
     return Status::OK();
 }
@@ -92,7 +89,7 @@ Status BetaRowsetWriterV2::create_file_writer(uint32_t segment_id, io::FileWrite
     return Status::OK();
 }
 
-void BetaRowsetWriterV2::add_segment(uint32_t segment_id, SegmentStatistics& segstat) {
+Status BetaRowsetWriterV2::add_segment(uint32_t segment_id, SegmentStatistics& segstat) {
     auto partition_id = _context.partition_id;
     auto sender_id = _context.sender_id;
     auto index_id = _context.index_id;
@@ -116,6 +113,7 @@ void BetaRowsetWriterV2::add_segment(uint32_t segment_id, SegmentStatistics& seg
         io::StreamSinkFileWriter::send_with_retry(stream, buf);
     }
     header.release_load_id();
+    return Status::OK();
 }
 
 Status BetaRowsetWriterV2::flush_memtable(vectorized::Block* block, int32_t segment_id,
