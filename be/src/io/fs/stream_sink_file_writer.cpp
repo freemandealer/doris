@@ -35,13 +35,22 @@ void StreamSinkFileWriter::init(PUniqueId load_id, int64_t partition_id, int64_t
     _index_id = index_id;
     _tablet_id = tablet_id;
     _segment_id = segment_id;
+
+     _header.set_sender_id(_sender_id);
+    *_header.mutable_load_id() = _load_id;
+    _header.set_partition_id(_partition_id);
+    _header.set_index_id(_index_id);
+    _header.set_tablet_id(_tablet_id);
+    _header.set_segment_id(_segment_id);
+    _header.set_opcode(doris::PStreamHeader::APPEND_DATA);
+    _append_header();
 }
 
-Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
+Status StreamSinkFileWriter::appendv(const Slice* data, size_t data_cnt) {
     size_t bytes_req = 0;
     for (int i = 0; i < data_cnt; i++) {
-        bytes_req += data[i].slice().get_size();
-        _pending_slices.emplace(std::move(data[i]));
+        bytes_req += data[i].get_size();
+        _buf.append(data[i].get_data(), data[i].get_size());
     }
     _pending_bytes += bytes_req;
     _bytes_appended += bytes_req;
@@ -51,58 +60,35 @@ Status StreamSinkFileWriter::appendv(OwnedSlice* data, size_t data_cnt) {
               << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
 
     if (_pending_bytes >= _max_pending_bytes) {
-        RETURN_IF_ERROR(_flush_pending_slices(false));
+        RETURN_IF_ERROR(_stream_sender(_buf));
+        _buf.clear();
+        _append_header();
+        _pending_bytes =0;
     }
 
     LOG(INFO) << "current batched bytes: " << _pending_bytes;
     return Status::OK();
 }
 
-Status StreamSinkFileWriter::_flush_pending_slices(bool eos) {
-    PStreamHeader header;
-    header.set_sender_id(_sender_id);
-    header.set_allocated_load_id(&_load_id);
-    header.set_partition_id(_partition_id);
-    header.set_index_id(_index_id);
-    header.set_tablet_id(_tablet_id);
-    header.set_segment_id(_segment_id);
-    header.set_segment_eos(eos);
-    header.set_opcode(doris::PStreamHeader::APPEND_DATA);
-
-    size_t header_len = header.ByteSizeLong();
-    LOG(INFO) << "OOXXOO header pb: " << header.DebugString();
-
-    butil::IOBuf buf;
-    buf.append(reinterpret_cast<uint8_t*>(&header_len), sizeof(header_len));
-    buf.append(header.SerializeAsString());
-
-    size_t bytes_req = 0;
-    while (!_pending_slices.empty()) {
-        OwnedSlice owend_slice = std::move(_pending_slices.front());
-        _pending_slices.pop();
-        Slice slice = owend_slice.slice();
-        bytes_req += slice.get_size();
-        buf.append_user_data(const_cast<void*>(static_cast<const void*>(slice.get_data())),
-                             slice.get_size(), deleter);
-        owend_slice.release();
-    }
-    _pending_bytes -= bytes_req;
-
-    LOG(INFO) << "writer flushing, load_id: " << UniqueId(_load_id).to_string()
-              << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
-              << ", segment_id: " << _segment_id << ", data_length: " << bytes_req;
-
-    Status status = _stream_sender(buf);
-    header.release_load_id();
-    return status;
-}
 
 Status StreamSinkFileWriter::finalize() {
     LOG(INFO) << "writer finalize, load_id: " << UniqueId(_load_id).to_string()
               << ", index_id: " << _index_id << ", tablet_id: " << _tablet_id
               << ", segment_id: " << _segment_id;
     // TODO(zhengyu): update get_inverted_index_file_size into stat
-    return _flush_pending_slices(true);
+    Status status = _stream_sender(_buf);
+    // send eos
+    _buf.clear();
+    _header.set_segment_eos(true);
+    _append_header();
+    status = _stream_sender(_buf);
+    return status;
+}
+
+void StreamSinkFileWriter::_append_header() {
+    size_t header_len = _header.ByteSizeLong();
+    _buf.append(reinterpret_cast<uint8_t*>(&header_len), sizeof(header_len));
+    _buf.append(_header.SerializeAsString());
 }
 
 Status StreamSinkFileWriter::send_with_retry(brpc::StreamId stream, butil::IOBuf buf) {
