@@ -722,6 +722,7 @@ message PStreamHeader {
     enum Opcode {
         APPEND_DATA = 1;
         CLOSE_LOAD = 2;
+        ADD_SEGMENT = 3;
     }
     optional PUniqueId load_id = 1;
     optional int64 partition_id = 2;

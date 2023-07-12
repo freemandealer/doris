@@ -131,9 +131,6 @@ public:
     Status fill_missing_columns(vectorized::MutableColumns& mutable_full_columns,
                                 const std::vector<bool>& use_default_flag, bool has_default);
 
-    void set_use_stream_sink_file_writer() { _use_stream_sink_file_writer = true; }
-    bool get_use_stream_sink_file_writer() { return _use_stream_sink_file_writer; }
-
 private:
     DISALLOW_COPY_AND_ASSIGN(SegmentWriter);
     Status _create_writers(const TabletSchema& tablet_schema, const std::vector<uint32_t>& col_ids,
@@ -174,7 +171,6 @@ private:
 
     // Not owned. owned by RowsetWriter
     io::FileWriter* _file_writer;
-    bool _use_stream_sink_file_writer = false;
 
     SegmentFooterPB _footer;
     size_t _num_key_columns;

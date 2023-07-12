@@ -796,18 +796,7 @@ Status SegmentWriter::finalize(uint64_t* segment_file_size, uint64_t* index_size
     // write footer
     RETURN_IF_ERROR(finalize_footer());
     // finish
-    if (get_use_stream_sink_file_writer()) {
-        SegmentStatistics stat;
-        stat.key_bounds.set_min_key(min_encoded_key().to_string());
-        stat.key_bounds.set_max_key(max_encoded_key().to_string());
-        stat.row_num = num_rows_written();
-        stat.index_size = *index_size;
-        stat.data_size = _file_writer->bytes_appended();
-        LOG(INFO) << "OOXXOO segment stat: " << stat.to_string();
-        RETURN_IF_ERROR(dynamic_cast<io::StreamSinkFileWriter*>(_file_writer)->finalize(&stat));
-    } else {
-        RETURN_IF_ERROR(_file_writer->finalize());
-    }
+    RETURN_IF_ERROR(_file_writer->finalize());
     *segment_file_size = _file_writer->bytes_appended();
 
     if (timer.elapsed_time() > 5000000000l) {
