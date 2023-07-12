@@ -61,33 +61,6 @@ namespace vectorized::schema_util {
 class LocalSchemaChangeRecorder;
 }
 
-struct SegmentStatistics {
-    int64_t row_num = 0;
-    int64_t data_size = 0;
-    int64_t index_size = 0;
-    KeyBoundsPB key_bounds;
-
-    SegmentStatistics() = default;
-
-    SegmentStatistics(SegmentStatisticsPB pb) : row_num(pb.row_num()), data_size(pb.data_size()),
-                                                index_size(pb.index_size()), key_bounds(pb.key_bounds()) {}
-
-    void to_pb(SegmentStatisticsPB* segstat_pb) {
-        segstat_pb->set_row_num(row_num);
-        segstat_pb->set_data_size(data_size);
-        segstat_pb->set_index_size(index_size);
-        segstat_pb->mutable_key_bounds()->CopyFrom(key_bounds);
-    }
-
-    std::string to_string() {
-        std::stringstream ss;
-        ss << "row_num: " << row_num << ", data_size: " << data_size << ", index_size: " << index_size
-           << ", key_bounds: " << key_bounds.ShortDebugString();
-        return ss.str();
-    }
-};
-using SegmentStatisticsSharedPtr = std::shared_ptr<SegmentStatistics>;
-
 class BetaRowsetWriter : public RowsetWriter {
     friend class SegcompactionWorker;
 
@@ -105,9 +78,9 @@ public:
 
     Status add_rowset_for_linked_schema_change(RowsetSharedPtr rowset) override;
 
-    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer);
+    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) override;
 
-    void add_segment(uint32_t segid, SegmentStatistics& segstat);
+    void add_segment(uint32_t segid, SegmentStatistics& segstat) override;
 
     Status flush() override;
 
