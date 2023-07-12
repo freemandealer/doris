@@ -20,7 +20,7 @@
 #include <gen_cpp/internal_service.pb.h>
 
 #include "olap/olap_common.h"
-#include "olap/rowset/rowset_writer.h"
+#include "olap/rowset/beta_rowset_writer.h"
 
 namespace doris {
 namespace io {

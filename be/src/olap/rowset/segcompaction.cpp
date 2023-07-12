@@ -187,7 +187,7 @@ Status SegcompactionWorker::_check_correctness(OlapReaderStatistics& reader_stat
 }
 
 Status SegcompactionWorker::_create_segment_writer_for_segcompaction(
-        std::unique_ptr<segment_v2::SegmentWriter>* writer, uint64_t begin, uint64_t end) {
+        std::unique_ptr<segment_v2::SegmentWriter>* writer, uint32_t begin, uint32_t end) {
     return _writer->_create_segment_writer_for_segcompaction(writer, begin, end);
 }
 

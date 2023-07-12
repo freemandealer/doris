@@ -41,6 +41,7 @@
 #include "olap/rowset/rowset_meta.h"
 #include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/rowset_writer_context.h"
+#include "olap/rowset/segment_v2/segment_writer.h"
 #include "segcompaction.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
