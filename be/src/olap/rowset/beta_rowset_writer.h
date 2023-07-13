@@ -78,9 +78,9 @@ public:
 
     Status add_rowset_for_linked_schema_change(RowsetSharedPtr rowset) override;
 
-    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) override;
+    Status create_file_writer(uint32_t segment_id, io::FileWriterPtr& writer) override;
 
-    void add_segment(uint32_t segid, SegmentStatistics& segstat) override;
+    Status add_segment(uint32_t segid, SegmentStatistics& segstat) override;
 
     Status flush() override;
 
@@ -131,7 +131,7 @@ public:
     int64_t segment_writer_ns() override { return _segment_writer_ns; }
 
 private:
-    Status _create_file_writer(std::string path, io::FileWriterPtr* file_writer);
+    Status _create_file_writer(std::string path, io::FileWriterPtr& file_writer);
     Status _check_segment_number_limit();
     Status _generate_delete_bitmap(int32_t segment_id);
     void _build_rowset_meta(std::shared_ptr<RowsetMeta> rowset_meta);

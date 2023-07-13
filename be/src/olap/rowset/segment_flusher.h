@@ -57,11 +57,51 @@ class SegmentWriter;
 } // namespace segment_v2
 
 struct SegmentStatistics;
-class FlushWriter;
+class SegmentFlushWriter;
 class BetaRowsetWriter;
 
+class FileWriterCreator {
+public:
+    virtual ~FileWriterCreator() = default;
+
+    virtual Status create(uint32_t segment_id, io::FileWriterPtr& file_writer) = 0;
+};
+
+template <class T>
+class FileWriterCreatorT : public FileWriterCreator {
+public:
+    explicit FileWriterCreatorT(T* t) : _t(t) {}
+
+    virtual Status create(uint32_t segment_id, io::FileWriterPtr& file_writer) override {
+        return _t->create_file_writer(segment_id, file_writer);
+    }
+
+private:
+    T* _t;
+};
+
+class SegmentCollector {
+public:
+    virtual ~SegmentCollector() = default;
+
+    virtual Status add(uint32_t segment_id, SegmentStatistics& segstats) = 0;
+};
+
+template <class T>
+class SegmentCollectorT : public SegmentCollector {
+public:
+    explicit SegmentCollectorT(T* t) : _t(t) {}
+
+    virtual Status add(uint32_t segment_id, SegmentStatistics& segstats) override {
+        return _t->add_segment(segment_id, segstats);
+    }
+
+private:
+    T* _t;
+};
+
 class SegmentFlusher {
-    friend class FlushWriter;
+    friend class SegmentFlushWriter;
 
 public:
     SegmentFlusher() = default;
@@ -75,8 +115,6 @@ public:
     Status flush_single_block(const vectorized::Block* block, int32_t segment_id,
                               SegmentStatistics& segstat, int64_t* flush_size = nullptr,
                               TabletSchemaSPtr flush_schema = nullptr);
-
-    std::unique_ptr<FlushWriter> create_writer();
 
     int64_t num_rows() const { return _num_rows_written; }
 
@@ -101,11 +139,11 @@ private:
     std::atomic<int64_t> _num_rows_written = 0;
 };
 
-class FlushWriter {
+class SegmentFlushWriter {
 public:
-    FlushWriter(SegmentFlusher* flusher) : _flusher(flusher) {}
+    SegmentFlushWriter(SegmentFlusher* flusher) : _flusher(flusher) {}
 
-    ~FlushWriter() = default;
+    ~SegmentFlushWriter() = default;
 
     Status init(uint32_t segment_id) {
         return _flusher->_create_segment_writer(_writer, segment_id);
@@ -126,8 +164,7 @@ private:
 
 class BetaRowsetSegmentWriter {
 public:
-    BetaRowsetSegmentWriter(std::function<void(uint32_t, SegmentStatistics&)> add_segment)
-            : _add_segment(add_segment) {}
+    BetaRowsetSegmentWriter() : _flush_writer(&_segment_flusher) {};
 
     ~BetaRowsetSegmentWriter() = default;
 
@@ -161,11 +198,10 @@ public:
     Status close();
 
 private:
-    std::function<void(uint32_t, SegmentStatistics&)> _add_segment;
-
+    std::shared_ptr<SegmentCollector> _segment_collector;
     std::atomic<int32_t> _next_segment_id = 0;
     SegmentFlusher _segment_flusher;
-    std::unique_ptr<FlushWriter> _segment_writer;
+    SegmentFlushWriter _flush_writer;
 };
 
 } // namespace doris

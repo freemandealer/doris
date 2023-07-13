@@ -82,7 +82,7 @@ public:
     // Precondition: the input `rowset` should have the same type of the rowset we're building
     virtual Status add_rowset_for_linked_schema_change(RowsetSharedPtr rowset) = 0;
 
-    virtual Status create_file_writer(uint32_t segment_id, io::FileWriterPtr* writer) {
+    virtual Status create_file_writer(uint32_t segment_id, io::FileWriterPtr& writer) {
         return Status::Error<ErrorCode::NOT_IMPLEMENTED_ERROR>(
                 "RowsetWriter not support create_file_writer");
     }
@@ -106,7 +106,7 @@ public:
                 "RowsetWriter not support flush_single_block");
     }
 
-    virtual void add_segment(uint32_t segid, SegmentStatistics& segstat) = 0;
+    virtual Status add_segment(uint32_t segid, SegmentStatistics& segstat) = 0;
 
     // finish building and return pointer to the built rowset (guaranteed to be inited).
     // return nullptr when failed

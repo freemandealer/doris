@@ -78,10 +78,6 @@ Status SegmentFlusher::flush_single_block(const vectorized::Block* block, int32_
     return Status::OK();
 }
 
-std::unique_ptr<FlushWriter> SegmentFlusher::create_writer() {
-    return std::make_unique<FlushWriter>(this);
-}
-
 Status SegmentFlusher::close() {
     std::lock_guard<SpinLock> l(_lock);
     for (auto& file_writer : _file_writers) {
@@ -110,7 +106,7 @@ Status SegmentFlusher::_create_segment_writer(std::unique_ptr<segment_v2::Segmen
                                               int32_t segment_id, bool no_compression,
                                               TabletSchemaSPtr flush_schema) {
     io::FileWriterPtr file_writer;
-    RETURN_IF_ERROR(_context.create_file_writer(segment_id, &file_writer));
+    RETURN_IF_ERROR(_context.file_writer_creator->create(segment_id, file_writer));
 
     segment_v2::SegmentWriterOptions writer_options;
     writer_options.enable_unique_key_merge_on_write = _context.enable_unique_key_merge_on_write;
@@ -173,7 +169,7 @@ Status SegmentFlusher::_flush_segment_writer(std::unique_ptr<segment_v2::Segment
     return Status::OK();
 }
 
-Status FlushWriter::flush(uint32_t& segment_id, SegmentStatistics& segstat) {
+Status SegmentFlushWriter::flush(uint32_t& segment_id, SegmentStatistics& segstat) {
     if (_writer == nullptr) {
         segstat.row_num = 0; // means no need to add_segment
         return Status::OK();
@@ -182,7 +178,7 @@ Status FlushWriter::flush(uint32_t& segment_id, SegmentStatistics& segstat) {
     return _flusher->_flush_segment_writer(_writer, segstat);
 }
 
-int64_t FlushWriter::max_row_to_add(size_t row_avg_size_in_bytes) {
+int64_t SegmentFlushWriter::max_row_to_add(size_t row_avg_size_in_bytes) {
     if (_writer == nullptr) {
         return 0;
     }
@@ -191,7 +187,7 @@ int64_t FlushWriter::max_row_to_add(size_t row_avg_size_in_bytes) {
 
 Status BetaRowsetSegmentWriter::init(const RowsetWriterContext& rowset_writer_context) {
     _segment_flusher.init(rowset_writer_context);
-    _segment_writer = _segment_flusher.create_writer();
+    _segment_collector = rowset_writer_context.segment_collector;
     return Status::OK();
 }
 
@@ -206,17 +202,17 @@ Status BetaRowsetSegmentWriter::add_block(const vectorized::Block* block) {
     size_t row_offset = 0;
 
     do {
-        auto max_row_add = _segment_writer->max_row_to_add(row_avg_size_in_bytes);
+        auto max_row_add = _flush_writer.max_row_to_add(row_avg_size_in_bytes);
         if (UNLIKELY(max_row_add < 1)) {
             // no space for another single row, need flush now
             RETURN_IF_ERROR(flush());
             // TODO: RETURN_IF_ERROR(_check_segment_number_limit());
-            RETURN_IF_ERROR(_segment_writer->init(allocate_segment_id()));
-            max_row_add = _segment_writer->max_row_to_add(row_avg_size_in_bytes);
+            RETURN_IF_ERROR(_flush_writer.init(allocate_segment_id()));
+            max_row_add = _flush_writer.max_row_to_add(row_avg_size_in_bytes);
             DCHECK(max_row_add > 0);
         }
         size_t input_row_num = std::min(block_row_num - row_offset, size_t(max_row_add));
-        RETURN_IF_ERROR(_segment_writer->add_rows(block, row_offset, input_row_num));
+        RETURN_IF_ERROR(_flush_writer.add_rows(block, row_offset, input_row_num));
         row_offset += input_row_num;
     } while (row_offset < block_row_num);
 
@@ -226,9 +222,9 @@ Status BetaRowsetSegmentWriter::add_block(const vectorized::Block* block) {
 Status BetaRowsetSegmentWriter::flush() {
     SegmentStatistics segstats;
     uint32_t segment_id = 0;
-    RETURN_IF_ERROR(_segment_writer->flush(segment_id, segstats));
+    RETURN_IF_ERROR(_flush_writer.flush(segment_id, segstats));
     if (segstats.row_num > 0) {
-        _add_segment(segment_id, segstats);
+        RETURN_IF_ERROR(_segment_collector->add(segment_id, segstats));
     }
     return Status::OK();
 }
@@ -243,13 +239,12 @@ Status BetaRowsetSegmentWriter::flush_single_block(const vectorized::Block* bloc
     SegmentStatistics segstats;
     RETURN_IF_ERROR(_segment_flusher.flush_single_block(block, segment_id, segstats, flush_size,
                                                         flush_schema));
-    _add_segment(segment_id, segstats);
+    RETURN_IF_ERROR(_segment_collector->add(segment_id, segstats));
     return Status::OK();
 }
 
 Status BetaRowsetSegmentWriter::close() {
     RETURN_IF_ERROR(flush());
-    _segment_writer.reset();
     RETURN_IF_ERROR(_segment_flusher.close());
     return Status::OK();
 }
