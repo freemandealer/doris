@@ -26,7 +26,6 @@
 
 namespace doris {
 
-/*
 #ifndef CHECK_STATUS_OK
 #define CHECK_STATUS_OK(stmt)                   \
     do {                                        \
@@ -149,7 +148,8 @@ protected:
 };
 
 TEST_F(StreamSinkFileWriterTest, TestInit) {
-    io::StreamSinkFileWriter writer(_stream);
+    std::vector<brpc::StreamId> stream_ids {_stream}; 
+    io::StreamSinkFileWriter writer(0, stream_ids);
     PUniqueId load_id;
     load_id.set_hi(1);
     load_id.set_lo(2);
@@ -157,26 +157,24 @@ TEST_F(StreamSinkFileWriterTest, TestInit) {
 }
 
 TEST_F(StreamSinkFileWriterTest, TestAppend) {
-    io::StreamSinkFileWriter writer(_stream);
+    std::vector<brpc::StreamId> stream_ids {_stream}; 
+    io::StreamSinkFileWriter writer(0, stream_ids);
     PUniqueId load_id;
     load_id.set_hi(1);
     load_id.set_lo(2);
     writer.init(load_id, 3, 4, 5, 6);
-    std::vector<OwnedSlice> slices;
-    faststring str;
-    str.assign_copy("hello");
-    slices.emplace_back(str.build());
+    std::vector<Slice> slices {"hello"};
     CHECK_STATUS_OK(writer.appendv(&slices[0], slices.size()));
 }
 
 TEST_F(StreamSinkFileWriterTest, TestFinalize) {
-    io::StreamSinkFileWriter writer(_stream);
+    std::vector<brpc::StreamId> stream_ids {_stream}; 
+    io::StreamSinkFileWriter writer(0, stream_ids);
     PUniqueId load_id;
     load_id.set_hi(1);
     load_id.set_lo(2);
     writer.init(load_id, 3, 4, 5, 6);
     CHECK_STATUS_OK(writer.finalize());
 }
-*/
 
 } // namespace doris

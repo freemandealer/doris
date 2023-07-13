@@ -372,29 +372,22 @@ public:
                 return Status::InternalError("Fail to create stream");
             }
 
-            PTabletWriterOpenRequest request;
+            POpenStreamSinkRequest request;
             POpenStreamSinkResponse response;
-            std::shared_ptr<PUniqueId> id = std::make_shared<PUniqueId>();
-            request.mutable_id()->set_hi(1);
-            request.mutable_id()->set_lo(1);
+            PUniqueId id;
+            id.set_hi(1);
+            id.set_lo(1);
 
             OlapTableSchemaParam param;
             construct_schema(&param);
-            request.set_allocated_schema(param.to_protobuf());
-            // unused
-            request.set_index_id(0);
+            *request.mutable_schema() = *param.to_protobuf();
+            *request.mutable_id() = id;
             request.set_txn_id(NORMAL_TXN_ID);
-            // request.set_schema(_parent->_schema->to_protobuf());
-            /* for (auto& tablet : _all_tablets) {
-                auto ptablet = request.add_tablets();
-                ptablet->set_partition_id(tablet.partition_id);
-                ptablet->set_tablet_id(tablet.tablet_id);
-            }*/
             request.set_num_senders(2);
-            request.set_need_gen_rollup(false); // Useless but it is a required field in pb
-            request.set_is_vectorized(true);
             request.set_backend_id(1);
-            request.set_enable_profile(true);
+            auto ptablet = request.add_tablets();
+            ptablet->set_tablet_id(NORMAL_TABLET_ID);
+            ptablet->set_index_id(NORMAL_INDEX_ID);
             stub.open_stream_sink(&_cntl, &request, &response, nullptr);
             if (_cntl.Failed()) {
                 std::cerr << "open_stream_sink failed" << std::endl;
@@ -402,7 +395,6 @@ public:
                 return Status::InternalError("Fail to open stream sink");
             }
 
-            request.release_schema();
             return Status::OK();
         }
 
