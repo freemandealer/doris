@@ -192,8 +192,6 @@ private:
 
     MonotonicStopWatch _lock_watch;
 
-    MemTableStat _memtable_stat;
-
     std::vector<brpc::StreamId> _streams;
 
     std::shared_ptr<std::atomic<int32_t>> _flying_memtable_counter;

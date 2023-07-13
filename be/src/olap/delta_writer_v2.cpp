@@ -203,9 +203,6 @@ Status DeltaWriterV2::write(const vectorized::Block* block, const std::vector<in
 }
 
 Status DeltaWriterV2::_flush_memtable_async() {
-    if (_mem_table->empty()) {
-        return Status::OK();
-    }
     return _flush_token->submit(std::move(_mem_table));
 }
 
@@ -343,10 +340,10 @@ Status DeltaWriterV2::close_wait() {
 
     _mem_table.reset();
 
-    if (_rowset_writer->num_rows() + _memtable_stat.merged_rows != _total_received_rows) {
+    if (_rowset_writer->num_rows() + _flush_token->memtable_stat().merged_rows != _total_received_rows) {
         LOG(WARNING) << "the rows number written doesn't match, rowset num rows written to file: "
                      << _rowset_writer->num_rows()
-                     << ", merged_rows: " << _memtable_stat.merged_rows
+                     << ", merged_rows: " << _flush_token->memtable_stat().merged_rows
                      << ", total received rows: " << _total_received_rows;
         return Status::InternalError("rows number written by delta writer dosen't match");
     }
