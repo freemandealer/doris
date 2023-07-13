@@ -17,12 +17,9 @@
 
 #include "olap/rowset/segment_flusher.h"
 
-#include <assert.h>
 // IWYU pragma: no_include <bthread/errno.h>
 #include <errno.h> // IWYU pragma: keep
-#include <stdio.h>
 
-#include <ctime> // time
 #include <filesystem>
 #include <sstream>
 #include <utility>
@@ -31,33 +28,17 @@
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
-#include "gutil/strings/substitute.h"
-#include "io/fs/file_reader_options.h"
-#include "io/fs/file_system.h"
 #include "io/fs/file_writer.h"
-#include "olap/olap_define.h"
-#include "olap/rowset/beta_rowset.h"
-#include "olap/rowset/beta_rowset_writer.h"
-#include "olap/rowset/rowset_factory.h"
-#include "olap/rowset/rowset_writer.h"
-#include "olap/rowset/segment_v2/inverted_index_cache.h"
-#include "olap/rowset/segment_v2/inverted_index_desc.h"
-#include "olap/rowset/segment_v2/segment.h"
+#include "olap/rowset/beta_rowset_writer.h" // SegmentStatistics
 #include "olap/rowset/segment_v2/segment_writer.h"
-#include "olap/schema_change.h"
-#include "olap/storage_engine.h"
-#include "olap/tablet_schema.h"
-#include "runtime/thread_context.h"
-#include "util/slice.h"
-#include "util/time.h"
-#include "vec/columns/column.h"
-#include "vec/columns/column_object.h"
-#include "vec/common/schema_util.h" // LocalSchemaChangeRecorder
 #include "vec/core/block.h"
-#include "vec/data_types/data_type_factory.hpp"
 
 namespace doris {
 using namespace ErrorCode;
+
+SegmentFlusher::SegmentFlusher() = default;
+
+SegmentFlusher::~SegmentFlusher() = default;
 
 Status SegmentFlusher::init(const RowsetWriterContext& rowset_writer_context) {
     _context = rowset_writer_context;
@@ -168,6 +149,11 @@ Status SegmentFlusher::_flush_segment_writer(std::unique_ptr<segment_v2::Segment
     }
     return Status::OK();
 }
+
+SegmentFlushWriter::SegmentFlushWriter(SegmentFlusher* flusher)
+        : _flusher(flusher), _writer(nullptr) {}
+
+SegmentFlushWriter::~SegmentFlushWriter() = default;
 
 Status SegmentFlushWriter::flush(uint32_t& segment_id, SegmentStatistics& segstat) {
     if (_writer == nullptr) {

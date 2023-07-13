@@ -17,34 +17,15 @@
 
 #pragma once
 
-#include <fmt/format.h>
 #include <gen_cpp/olap_file.pb.h>
-#include <stddef.h>
-#include <stdint.h>
 
-#include <algorithm>
-#include <atomic>
-#include <condition_variable>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <roaring/roaring.hh>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "common/status.h"
 #include "io/fs/file_reader_writer_fwd.h"
-#include "io/fs/file_writer.h"
 #include "olap/olap_common.h"
-#include "olap/rowset/rowset.h"
-#include "olap/rowset/rowset_meta.h"
-#include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/rowset_writer_context.h"
-#include "olap/rowset/segment_v2/segment_writer.h"
-#include "segcompaction.h"
-#include "segment_v2/segment.h"
 #include "util/spinlock.h"
 
 namespace doris {
@@ -72,7 +53,7 @@ class FileWriterCreatorT : public FileWriterCreator {
 public:
     explicit FileWriterCreatorT(T* t) : _t(t) {}
 
-    virtual Status create(uint32_t segment_id, io::FileWriterPtr& file_writer) override {
+    Status create(uint32_t segment_id, io::FileWriterPtr& file_writer) override {
         return _t->create_file_writer(segment_id, file_writer);
     }
 
@@ -84,7 +65,7 @@ class SegmentCollector {
 public:
     virtual ~SegmentCollector() = default;
 
-    virtual Status add(uint32_t segment_id, SegmentStatistics& segstats) = 0;
+    virtual Status add(uint32_t segment_id, SegmentStatistics& segstat) = 0;
 };
 
 template <class T>
@@ -92,8 +73,8 @@ class SegmentCollectorT : public SegmentCollector {
 public:
     explicit SegmentCollectorT(T* t) : _t(t) {}
 
-    virtual Status add(uint32_t segment_id, SegmentStatistics& segstats) override {
-        return _t->add_segment(segment_id, segstats);
+    Status add(uint32_t segment_id, SegmentStatistics& segstat) override {
+        return _t->add_segment(segment_id, segstat);
     }
 
 private:
@@ -104,9 +85,9 @@ class SegmentFlusher {
     friend class SegmentFlushWriter;
 
 public:
-    SegmentFlusher() = default;
+    SegmentFlusher();
 
-    ~SegmentFlusher() = default;
+    ~SegmentFlusher();
 
     Status init(const RowsetWriterContext& rowset_writer_context);
 
@@ -141,9 +122,9 @@ private:
 
 class SegmentFlushWriter {
 public:
-    SegmentFlushWriter(SegmentFlusher* flusher) : _flusher(flusher) {}
+    SegmentFlushWriter(SegmentFlusher* flusher);
 
-    ~SegmentFlushWriter() = default;
+    ~SegmentFlushWriter();
 
     Status init(uint32_t segment_id) {
         return _flusher->_create_segment_writer(_writer, segment_id);
