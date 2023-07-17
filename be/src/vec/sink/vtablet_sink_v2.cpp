@@ -467,7 +467,6 @@ Status VOlapTableSinkV2::_write_memtable(std::shared_ptr<vectorized::Block> bloc
             wrequest.partition_id = rows.partition_id;
             wrequest.index_id = rows.index_id;
             wrequest.tablet_id = tablet_id;
-            wrequest.write_type = DeltaWriterV2::WriteType::LOAD;
             wrequest.txn_id = _txn_id;
             wrequest.load_id = _load_id;
             wrequest.tuple_desc = _output_tuple_desc;
