@@ -64,6 +64,7 @@ public:
         int32_t schema_hash;
         int64_t txn_id;
         int64_t partition_id;
+        int64_t index_id = 0;
         OlapTableSchemaParam* table_schema_param;
         TabletSchemaSPtr tablet_schema;
         bool enable_unique_key_merge_on_write = false;

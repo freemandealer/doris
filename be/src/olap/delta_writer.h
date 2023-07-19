@@ -58,6 +58,7 @@ struct WriteRequest : MemTableWriter::WriteRequest {
     int32_t schema_hash;
     int64_t txn_id;
     int64_t partition_id;
+    int64_t index_id = 0;
     OlapTableSchemaParam* table_schema_param;
 };
 

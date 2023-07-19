@@ -68,7 +68,6 @@ public:
         // slots are in order of tablet's schema
         const std::vector<SlotDescriptor*>* slots;
         bool is_high_priority = false;
-        int64_t index_id = 0;
     };
 
     MemTableWriter(const WriteRequest& req, RuntimeProfile* profile);
