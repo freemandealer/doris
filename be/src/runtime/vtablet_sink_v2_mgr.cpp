@@ -200,7 +200,7 @@ void VOlapTableSinkV2Mgr::handle_memtable_flush() {
 void VOlapTableSinkV2Mgr::_refresh_mem_tracker() {
     int64_t mem_usage = 0;
     for (auto& writer : _writers) {
-        mem_usage += writer->mem_consumption(doris::DeltaWriterV2::MemType::ALL);
+        mem_usage += writer->mem_consumption(doris::MemType::ALL);
     }
     THREAD_MEM_TRACKER_TRANSFER_TO(mem_usage - _mem_tracker->consumption(), _mem_tracker.get());
 }

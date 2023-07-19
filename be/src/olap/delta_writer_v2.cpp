@@ -38,8 +38,6 @@
 #include "gutil/strings/numbers.h"
 #include "io/fs/file_writer.h" // IWYU pragma: keep
 #include "olap/data_dir.h"
-#include "olap/memtable.h"
-#include "olap/memtable_flush_executor.h"
 #include "olap/olap_define.h"
 #include "olap/rowset/beta_rowset.h"
 #include "olap/rowset/beta_rowset_writer_v2.h"
@@ -53,8 +51,6 @@
 #include "olap/storage_engine.h"
 #include "olap/tablet_manager.h"
 #include "runtime/exec_env.h"
-#include "runtime/load_channel_mgr.h"
-#include "runtime/memory/mem_tracker.h"
 #include "service/backend_options.h"
 #include "util/brpc_client_cache.h"
 #include "util/mem_info.h"
@@ -76,30 +72,16 @@ DeltaWriterV2::DeltaWriterV2(WriteRequest* req, StorageEngine* storage_engine,
                              RuntimeProfile* profile, const UniqueId& load_id)
         : _req(*req),
           _rowset_writer(nullptr),
+          _memtable_writer(*req, profile),
           _tablet_schema(new TabletSchema),
           _delta_written_success(false),
-          _storage_engine(storage_engine),
           _load_id(load_id) {
     _init_profile(profile);
 }
 
 void DeltaWriterV2::_init_profile(RuntimeProfile* profile) {
     _profile = profile->create_child(fmt::format("DeltaWriterV2 {}", _req.tablet_id), true, true);
-    _lock_timer = ADD_TIMER(_profile, "LockTime");
-    _sort_timer = ADD_TIMER(_profile, "MemTableSortTime");
-    _agg_timer = ADD_TIMER(_profile, "MemTableAggTime");
-    _memtable_duration_timer = ADD_TIMER(_profile, "MemTableDurationTime");
-    _segment_writer_timer = ADD_TIMER(_profile, "SegmentWriterTime");
-    _wait_flush_timer = ADD_TIMER(_profile, "MemTableWaitFlushTime");
-    _put_into_output_timer = ADD_TIMER(_profile, "MemTablePutIntoOutputTime");
     _close_wait_timer = ADD_TIMER(_profile, "DeltaWriterV2CloseWaitTime");
-    _rowset_build_timer = ADD_TIMER(_profile, "RowsetBuildTime");
-    _commit_txn_timer = ADD_TIMER(_profile, "CommitTxnTime");
-    _sort_times = ADD_COUNTER(_profile, "MemTableSortTimes", TUnit::UNIT);
-    _agg_times = ADD_COUNTER(_profile, "MemTableAggTimes", TUnit::UNIT);
-    _segment_num = ADD_COUNTER(_profile, "SegmentNum", TUnit::UNIT);
-    _raw_rows_num = ADD_COUNTER(_profile, "RawRowNum", TUnit::UNIT);
-    _merged_rows_num = ADD_COUNTER(_profile, "MergedRowNum", TUnit::UNIT);
 }
 
 DeltaWriterV2::~DeltaWriterV2() {
@@ -107,12 +89,8 @@ DeltaWriterV2::~DeltaWriterV2() {
         return;
     }
 
-    if (_flush_token != nullptr) {
-        // cancel and wait all memtables in flush queue to be finished
-        _flush_token->cancel();
-    }
-
-    _mem_table.reset();
+    // cancel and wait all memtables in flush queue to be finished
+    _memtable_writer.cancel();
 }
 
 Status DeltaWriterV2::init() {
@@ -138,19 +116,10 @@ Status DeltaWriterV2::init() {
     context.data_dir = nullptr;
     context.sender_id = _req.sender_id;
 
-    _rowset_writer = std::make_unique<BetaRowsetWriterV2>(_streams);
+    _rowset_writer = std::make_shared<BetaRowsetWriterV2>(_streams);
     _rowset_writer->init(context);
-
-    _reset_mem_table();
-
-    // create flush handler
-    // by assigning segment_id to memtable before submiting to flush executor,
-    // we can make sure same keys sort in the same order in all replicas.
-    bool should_serial = false;
-    RETURN_IF_ERROR(_storage_engine->memtable_flush_executor()->create_flush_token(
-            _flush_token, _rowset_writer.get(), should_serial, _req.is_high_priority));
-    _flush_token->register_flying_memtable_counter(_flying_memtable_counter);
-
+    _memtable_writer.init(_rowset_writer, _tablet_schema,
+                          _req.enable_unique_key_merge_on_write);
     _is_init = true;
     return Status::OK();
 }
@@ -170,118 +139,15 @@ Status DeltaWriterV2::write(const vectorized::Block* block, const std::vector<in
     if (!_is_init && !_is_cancelled) {
         RETURN_IF_ERROR(init());
     }
-
-    if (_is_cancelled) {
-        return _cancel_status;
-    }
-
-    if (_is_closed) {
-        LOG(WARNING) << "write block after closed tablet_id=" << _req.tablet_id
-                     << " load_id=" << _req.load_id << " txn_id=" << _req.txn_id;
-        return Status::Error<ALREADY_CLOSED>();
-    }
-
-    if (is_append) {
-        _total_received_rows += block->rows();
-    } else {
-        _total_received_rows += row_idxs.size();
-    }
-    _mem_table->insert(block, row_idxs, is_append);
-
-    if (UNLIKELY(_mem_table->need_agg() && config::enable_shrink_memory)) {
-        _mem_table->shrink_memtable_by_agg();
-    }
-    if (UNLIKELY(_mem_table->need_flush())) {
-        auto s = _flush_memtable_async();
-        _reset_mem_table();
-        if (UNLIKELY(!s.ok())) {
-            return s;
-        }
-    }
-
-    return Status::OK();
-}
-
-Status DeltaWriterV2::_flush_memtable_async() {
-    return _flush_token->submit(std::move(_mem_table));
+    return _memtable_writer.write(block, row_idxs, is_append);
 }
 
 Status DeltaWriterV2::flush_memtable_and_wait(bool need_wait) {
-    std::lock_guard<std::mutex> l(_lock);
-    if (!_is_init) {
-        // This writer is not initialized before flushing. Do nothing
-        // But we return OK instead of Status::Error<ALREADY_CANCELLED>(),
-        // Because this method maybe called when trying to reduce mem consumption,
-        // and at that time, the writer may not be initialized yet and that is a normal case.
-        return Status::OK();
-    }
-
-    if (_is_cancelled) {
-        return _cancel_status;
-    }
-
-    VLOG_NOTICE << "flush memtable to reduce mem consumption. memtable size: "
-                << _mem_table->memory_usage() << ", tablet: " << _req.tablet_id
-                << ", load id: " << print_id(_req.load_id);
-    auto s = _flush_memtable_async();
-    _reset_mem_table();
-    if (UNLIKELY(!s.ok())) {
-        return s;
-    }
-
-    if (need_wait) {
-        // wait all memtables in flush queue to be flushed.
-        SCOPED_TIMER(_wait_flush_timer);
-        RETURN_IF_ERROR(_flush_token->wait());
-    }
-    return Status::OK();
+    return _memtable_writer.flush_memtable_and_wait(need_wait);
 }
 
 Status DeltaWriterV2::wait_flush() {
-    {
-        std::lock_guard<std::mutex> l(_lock);
-        if (!_is_init) {
-            // return OK instead of Status::Error<ALREADY_CANCELLED>() for same reason
-            // as described in flush_memtable_and_wait()
-            return Status::OK();
-        }
-        if (_is_cancelled) {
-            return _cancel_status;
-        }
-    }
-    SCOPED_TIMER(_wait_flush_timer);
-    RETURN_IF_ERROR(_flush_token->wait());
-    return Status::OK();
-}
-
-void DeltaWriterV2::_reset_mem_table() {
-#ifndef BE_TEST
-    auto mem_table_insert_tracker = std::make_shared<MemTracker>(
-            fmt::format("MemTableManualInsert:TabletId={}:MemTableNum={}#loadID={}",
-                        std::to_string(tablet_id()), _mem_table_num, _load_id.to_string()),
-            ExecEnv::GetInstance()->load_channel_mgr()->mem_tracker());
-    auto mem_table_flush_tracker = std::make_shared<MemTracker>(
-            fmt::format("MemTableHookFlush:TabletId={}:MemTableNum={}#loadID={}",
-                        std::to_string(tablet_id()), _mem_table_num++, _load_id.to_string()),
-            ExecEnv::GetInstance()->load_channel_mgr()->mem_tracker());
-#else
-    auto mem_table_insert_tracker = std::make_shared<MemTracker>(
-            fmt::format("MemTableManualInsert:TabletId={}:MemTableNum={}#loadID={}",
-                        std::to_string(tablet_id()), _mem_table_num, _load_id.to_string()));
-    auto mem_table_flush_tracker = std::make_shared<MemTracker>(
-            fmt::format("MemTableHookFlush:TabletId={}:MemTableNum={}#loadID={}",
-                        std::to_string(tablet_id()), _mem_table_num++, _load_id.to_string()));
-#endif
-    {
-        std::lock_guard<SpinLock> l(_mem_table_tracker_lock);
-        _mem_table_insert_trackers.push_back(mem_table_insert_tracker);
-        _mem_table_flush_trackers.push_back(mem_table_flush_tracker);
-    }
-    _mem_table.reset(new MemTable(_req.tablet_id, _tablet_schema.get(), _req.slots, _req.tuple_desc,
-                                  _req.enable_unique_key_merge_on_write, mem_table_insert_tracker,
-                                  mem_table_flush_tracker));
-
-    COUNTER_UPDATE(_segment_num, 1);
+    return _memtable_writer.wait_flush();
 }
 
 Status DeltaWriterV2::close() {
@@ -296,25 +162,7 @@ Status DeltaWriterV2::close() {
         // for this tablet when being closed.
         RETURN_IF_ERROR(init());
     }
-
-    if (_is_cancelled) {
-        return _cancel_status;
-    }
-
-    if (_is_closed) {
-        LOG(WARNING) << "close after closed tablet_id=" << _req.tablet_id
-                     << " load_id=" << _req.load_id << " txn_id=" << _req.txn_id;
-        return Status::OK();
-    }
-
-    auto s = _flush_memtable_async();
-    _mem_table.reset();
-    _is_closed = true;
-    if (UNLIKELY(!s.ok())) {
-        return s;
-    } else {
-        return Status::OK();
-    }
+    return _memtable_writer.close();
 }
 
 Status DeltaWriterV2::close_wait() {
@@ -323,52 +171,9 @@ Status DeltaWriterV2::close_wait() {
     DCHECK(_is_init)
             << "delta writer is supposed be to initialized before close_wait() being called";
 
-    if (_is_cancelled) {
-        return _cancel_status;
-    }
-
-    Status st;
-    // return error if previous flush failed
-    {
-        SCOPED_TIMER(_wait_flush_timer);
-        st = _flush_token->wait();
-    }
-    if (UNLIKELY(!st.ok())) {
-        LOG(WARNING) << "previous flush failed tablet " << tablet_id();
-        return st;
-    }
-
-    _mem_table.reset();
-
-    if (_rowset_writer->num_rows() + _flush_token->memtable_stat().merged_rows != _total_received_rows) {
-        LOG(WARNING) << "the rows number written doesn't match, rowset num rows written to file: "
-                     << _rowset_writer->num_rows()
-                     << ", merged_rows: " << _flush_token->memtable_stat().merged_rows
-                     << ", total received rows: " << _total_received_rows;
-        return Status::InternalError("rows number written by delta writer dosen't match");
-    }
+    RETURN_IF_ERROR(_memtable_writer.close_wait());
 
     _delta_written_success = true;
-
-    // const FlushStatistic& stat = _flush_token->get_stats();
-    // print slow log if wait more than 1s
-    /*if (_wait_flush_timer->elapsed_time() > 1000UL * 1000 * 1000) {
-        LOG(INFO) << "close delta writer for tablet: " << tablet_id()
-                  << ", load id: " << print_id(_req.load_id) << ", wait close for "
-                  << _wait_flush_timer->elapsed_time() << "(ns), stats: " << stat;
-    }*/
-
-    COUNTER_UPDATE(_lock_timer, _lock_watch.elapsed_time() / 1000);
-    COUNTER_SET(_segment_writer_timer, _rowset_writer->segment_writer_ns());
-    const auto& memtable_stat = _flush_token->memtable_stat();
-    COUNTER_SET(_sort_timer, memtable_stat.sort_ns);
-    COUNTER_SET(_agg_timer, memtable_stat.agg_ns);
-    COUNTER_SET(_memtable_duration_timer, memtable_stat.duration_ns);
-    COUNTER_SET(_put_into_output_timer, memtable_stat.put_into_output_ns);
-    COUNTER_SET(_sort_times, memtable_stat.sort_times);
-    COUNTER_SET(_agg_times, memtable_stat.agg_times);
-    COUNTER_SET(_raw_rows_num, memtable_stat.raw_rows);
-    COUNTER_SET(_merged_rows_num, memtable_stat.merged_rows);
     return Status::OK();
 }
 
@@ -381,54 +186,17 @@ Status DeltaWriterV2::cancel_with_status(const Status& st) {
     if (_is_cancelled) {
         return Status::OK();
     }
-    _mem_table.reset();
-    if (_flush_token != nullptr) {
-        // cancel and wait all memtables in flush queue to be finished
-        _flush_token->cancel();
-    }
+    RETURN_IF_ERROR(_memtable_writer.cancel_with_status(st));
     _is_cancelled = true;
-    _cancel_status = st;
     return Status::OK();
 }
 
 int64_t DeltaWriterV2::mem_consumption(MemType mem) {
-    if (_flush_token == nullptr) {
-        // This method may be called before this writer is initialized.
-        // So _flush_token may be null.
-        return 0;
-    }
-    int64_t mem_usage = 0;
-    {
-        std::lock_guard<SpinLock> l(_mem_table_tracker_lock);
-        if ((mem & MemType::WRITE) == MemType::WRITE) { // 3 & 2 = 2
-            for (auto mem_table_tracker : _mem_table_insert_trackers) {
-                mem_usage += mem_table_tracker->consumption();
-            }
-        }
-        if ((mem & MemType::FLUSH) == MemType::FLUSH) { // 3 & 1 = 1
-            for (auto mem_table_tracker : _mem_table_flush_trackers) {
-                mem_usage += mem_table_tracker->consumption();
-            }
-        }
-    }
-    return mem_usage;
+    return _memtable_writer.mem_consumption(mem);
 }
 
 int64_t DeltaWriterV2::active_memtable_mem_consumption() {
-    if (_flush_token == nullptr) {
-        // This method may be called before this writer is initialized.
-        // So _flush_token may be null.
-        return 0;
-    }
-    int64_t mem_usage = 0;
-    {
-        std::lock_guard<SpinLock> l(_mem_table_tracker_lock);
-        if (_mem_table_insert_trackers.size() > 0) {
-            mem_usage += (*_mem_table_insert_trackers.rbegin())->consumption();
-            mem_usage += (*_mem_table_flush_trackers.rbegin())->consumption();
-        }
-    }
-    return mem_usage;
+    return _memtable_writer.active_memtable_mem_consumption();
 }
 
 int64_t DeltaWriterV2::partition_id() const {
