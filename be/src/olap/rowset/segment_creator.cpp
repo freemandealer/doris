@@ -154,6 +154,19 @@ Status SegmentFlusher::_flush_segment_writer(std::unique_ptr<segment_v2::Segment
     return Status::OK();
 }
 
+Status SegmentFlusher::create_writer(std::unique_ptr<SegmentFlusher::Writer>& writer,
+                                     uint32_t segment_id) {
+    std::unique_ptr<segment_v2::SegmentWriter> segment_writer;
+    RETURN_IF_ERROR(_create_segment_writer(segment_writer, segment_id));
+    DCHECK(segment_writer != nullptr);
+    writer.reset(new SegmentFlusher::Writer(this, segment_writer));
+    return Status::OK();
+}
+
+SegmentFlusher::Writer::Writer(SegmentFlusher* flusher,
+                               std::unique_ptr<segment_v2::SegmentWriter>& segment_writer)
+        : _flusher(flusher), _writer(std::move(segment_writer)) {};
+
 SegmentFlusher::Writer::~Writer() = default;
 
 Status SegmentFlusher::Writer::flush() {

@@ -114,20 +114,13 @@ public:
         int64_t max_row_to_add(size_t row_avg_size_in_bytes);
 
     private:
-        Writer(SegmentFlusher* flusher, std::unique_ptr<segment_v2::SegmentWriter>& segment_writer)
-                : _flusher(flusher), _writer(std::move(segment_writer)) {};
+        Writer(SegmentFlusher* flusher, std::unique_ptr<segment_v2::SegmentWriter>& segment_writer);
 
         SegmentFlusher* _flusher;
         std::unique_ptr<segment_v2::SegmentWriter> _writer;
     };
 
-    Status create_writer(std::unique_ptr<SegmentFlusher::Writer>& writer, uint32_t segment_id) {
-        std::unique_ptr<segment_v2::SegmentWriter> segment_writer;
-        RETURN_IF_ERROR(_create_segment_writer(segment_writer, segment_id));
-        DCHECK(segment_writer != nullptr);
-        writer.reset(new SegmentFlusher::Writer(this, segment_writer));
-        return Status::OK();
-    }
+    Status create_writer(std::unique_ptr<SegmentFlusher::Writer>& writer, uint32_t segment_id);
 
 private:
     Status _add_rows(std::unique_ptr<segment_v2::SegmentWriter>& segment_writer,
