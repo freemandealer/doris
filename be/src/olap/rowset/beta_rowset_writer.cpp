@@ -468,7 +468,6 @@ Status BetaRowsetWriter::flush_memtable(vectorized::Block* block, int32_t segmen
         return Status::OK();
     }
 
-    RETURN_IF_ERROR(_check_segment_number_limit());
     TabletSchemaSPtr flush_schema;
     if (_context.tablet_schema->is_dynamic_schema()) {
         // Unfold variant column
@@ -535,7 +534,7 @@ RowsetSharedPtr BetaRowsetWriter::build() {
     Status status;
     status = _segment_creator.close();
     if (!status.ok()) {
-        LOG(WARNING) << "close rowset segment writer failed when build new rowset, res=" << status;
+        LOG(WARNING) << "failed to close segment creator when build new rowset, res=" << status;
         return nullptr;
     }
     status = wait_flying_segcompaction();
@@ -556,6 +555,11 @@ RowsetSharedPtr BetaRowsetWriter::build() {
 
     if (_segcompaction_worker.get_file_writer()) {
         _segcompaction_worker.get_file_writer()->close();
+    }
+    status = _check_segment_number_limit();
+    if (!status.ok()) {
+        LOG(WARNING) << "build rowset failed, res=" << status;
+        return nullptr;
     }
     _build_rowset_meta(_rowset_meta);
 

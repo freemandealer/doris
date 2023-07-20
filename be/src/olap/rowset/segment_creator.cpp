@@ -201,7 +201,6 @@ Status SegmentCreator::add_block(const vectorized::Block* block) {
         if (UNLIKELY(max_row_add < 1)) {
             // no space for another single row, need flush now
             RETURN_IF_ERROR(flush());
-            // TODO: RETURN_IF_ERROR(_check_segment_number_limit());
             RETURN_IF_ERROR(_segment_flusher.create_writer(_flush_writer, allocate_segment_id()));
             max_row_add = _flush_writer->max_row_to_add(row_avg_size_in_bytes);
             DCHECK(max_row_add > 0);
@@ -228,7 +227,6 @@ Status SegmentCreator::flush_single_block(const vectorized::Block* block, int32_
     if (block->rows() == 0) {
         return Status::OK();
     }
-    //TODO: RETURN_IF_ERROR(_check_segment_number_limit());
     RETURN_IF_ERROR(
             _segment_flusher.flush_single_block(block, segment_id, flush_size, flush_schema));
     return Status::OK();
