@@ -72,7 +72,7 @@ Status BetaRowsetWriterV2::init(const RowsetWriterContext& rowset_writer_context
     _context = rowset_writer_context;
     _context.segment_collector = std::make_shared<SegmentCollectorT<BetaRowsetWriterV2>>(this);
     _context.file_writer_creator = std::make_shared<FileWriterCreatorT<BetaRowsetWriterV2>>(this);
-    _segment_writer.init(_context);
+    _segment_creator.init(_context);
     return Status::OK();
 }
 
@@ -132,14 +132,14 @@ Status BetaRowsetWriterV2::flush_memtable(vectorized::Block* block, int32_t segm
     {
         SCOPED_RAW_TIMER(&_segment_writer_ns);
         RETURN_IF_ERROR(
-                _segment_writer.flush_single_block(block, segment_id, flush_size, flush_schema));
+                _segment_creator.flush_single_block(block, segment_id, flush_size, flush_schema));
     }
     // delete bitmap and seg compaction are done on the destination BE.
     return Status::OK();
 }
 
 Status BetaRowsetWriterV2::flush_single_block(const vectorized::Block* block) {
-    return _segment_writer.flush_single_block(block);
+    return _segment_creator.flush_single_block(block);
 }
 
 } // namespace doris

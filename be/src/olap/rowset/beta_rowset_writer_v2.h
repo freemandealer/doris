@@ -43,7 +43,7 @@
 #include "olap/rowset/rowset_meta.h"
 #include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/rowset_writer_context.h"
-#include "olap/rowset/segment_flusher.h"
+#include "olap/rowset/segment_creator.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
 
@@ -103,7 +103,7 @@ public:
 
     Version version() override { return _context.version; }
 
-    int64_t num_rows() const override { return _segment_writer.num_rows(); }
+    int64_t num_rows() const override { return _segment_creator.num_rows_written(); }
 
     RowsetId rowset_id() override { return _context.rowset_id; }
 
@@ -150,7 +150,7 @@ private:
     std::atomic<int64_t> _total_index_size;
     // TODO rowset Zonemap
 
-    BetaRowsetSegmentWriter _segment_writer;
+    SegmentCreator _segment_creator;
 
     fmt::memory_buffer vlog_buffer;
 
