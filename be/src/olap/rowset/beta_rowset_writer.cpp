@@ -80,14 +80,14 @@ BetaRowsetWriter::~BetaRowsetWriter() {
     wait_flying_segcompaction();
 
     // TODO(lingbin): Should wrapper exception logic, no need to know file ops directly.
-    if (!_already_built) {       // abnormal exit, remove all files generated
-        _segment_writer.close(); // ensure all files are closed
+    if (!_already_built) {        // abnormal exit, remove all files generated
+        _segment_creator.close(); // ensure all files are closed
         auto fs = _rowset_meta->fs();
         if (!fs) {
             return;
         }
-        DCHECK_LE(_segment_start_id + _num_segment, _segment_writer.next_segment_id());
-        for (int i = _segment_start_id; i < _segment_writer.next_segment_id(); ++i) {
+        DCHECK_LE(_segment_start_id + _num_segment, _segment_creator.next_segment_id());
+        for (int i = _segment_start_id; i < _segment_creator.next_segment_id(); ++i) {
             std::string seg_path =
                     BetaRowset::segment_file_path(_context.rowset_dir, _context.rowset_id, i);
             // Even if an error is encountered, these files that have not been cleaned up
@@ -124,12 +124,12 @@ Status BetaRowsetWriter::init(const RowsetWriterContext& rowset_writer_context) 
             std::make_shared<vectorized::schema_util::LocalSchemaChangeRecorder>();
     _context.segment_collector = std::make_shared<SegmentCollectorT<BetaRowsetWriter>>(this);
     _context.file_writer_creator = std::make_shared<FileWriterCreatorT<BetaRowsetWriter>>(this);
-    _segment_writer.init(_context);
+    _segment_creator.init(_context);
     return Status::OK();
 }
 
 Status BetaRowsetWriter::add_block(const vectorized::Block* block) {
-    return _segment_writer.add_block(block);
+    return _segment_creator.add_block(block);
 }
 
 Status BetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
@@ -459,7 +459,7 @@ Status BetaRowsetWriter::add_rowset_for_linked_schema_change(RowsetSharedPtr row
 }
 
 Status BetaRowsetWriter::flush() {
-    return _segment_writer.flush();
+    return _segment_creator.flush();
 }
 
 Status BetaRowsetWriter::flush_memtable(vectorized::Block* block, int32_t segment_id,
@@ -477,7 +477,7 @@ Status BetaRowsetWriter::flush_memtable(vectorized::Block* block, int32_t segmen
     {
         SCOPED_RAW_TIMER(&_segment_writer_ns);
         RETURN_IF_ERROR(
-                _segment_writer.flush_single_block(block, segment_id, flush_size, flush_schema));
+                _segment_creator.flush_single_block(block, segment_id, flush_size, flush_schema));
     }
     RETURN_IF_ERROR(_generate_delete_bitmap(segment_id));
     RETURN_IF_ERROR(_segcompaction_if_necessary());
@@ -485,7 +485,7 @@ Status BetaRowsetWriter::flush_memtable(vectorized::Block* block, int32_t segmen
 }
 
 Status BetaRowsetWriter::flush_single_block(const vectorized::Block* block) {
-    return _segment_writer.flush_single_block(block);
+    return _segment_creator.flush_single_block(block);
 }
 
 Status BetaRowsetWriter::wait_flying_segcompaction() {
@@ -533,7 +533,7 @@ RowsetSharedPtr BetaRowsetWriter::build() {
         }
     }
     Status status;
-    status = _segment_writer.close();
+    status = _segment_creator.close();
     if (!status.ok()) {
         LOG(WARNING) << "close rowset segment writer failed when build new rowset, res=" << status;
         return nullptr;

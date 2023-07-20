@@ -41,7 +41,7 @@
 #include "olap/rowset/rowset_meta.h"
 #include "olap/rowset/rowset_writer.h"
 #include "olap/rowset/rowset_writer_context.h"
-#include "olap/rowset/segment_flusher.h"
+#include "olap/rowset/segment_creator.h"
 #include "segcompaction.h"
 #include "segment_v2/segment.h"
 #include "util/spinlock.h"
@@ -97,7 +97,7 @@ public:
 
     Version version() override { return _context.version; }
 
-    int64_t num_rows() const override { return _segment_writer.num_rows(); }
+    int64_t num_rows() const override { return _segment_creator.num_rows_written(); }
 
     RowsetId rowset_id() override { return _context.rowset_id; }
 
@@ -109,7 +109,7 @@ public:
         return Status::OK();
     }
 
-    int32_t allocate_segment_id() override { return _segment_writer.allocate_segment_id(); };
+    int32_t allocate_segment_id() override { return _segment_creator.allocate_segment_id(); };
 
     SegcompactionWorker& get_segcompaction_worker() { return _segcompaction_worker; }
 
@@ -122,7 +122,7 @@ public:
     Status wait_flying_segcompaction() override;
 
     void set_segment_start_id(int32_t start_id) override {
-        _segment_writer.set_segment_start_id(start_id);
+        _segment_creator.set_segment_start_id(start_id);
         _segment_start_id = start_id;
     }
 
@@ -200,7 +200,7 @@ protected:
     bool _is_pending = false;
     bool _already_built = false;
 
-    BetaRowsetSegmentWriter _segment_writer;
+    SegmentCreator _segment_creator;
     SegcompactionWorker _segcompaction_worker;
 
     // ensure only one inflight segcompaction task for each rowset

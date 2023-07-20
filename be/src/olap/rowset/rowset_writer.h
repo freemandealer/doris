@@ -35,9 +35,9 @@
 namespace doris {
 
 struct SegmentStatistics {
-    int64_t row_num = 0;
-    int64_t data_size = 0;
-    int64_t index_size = 0;
+    int64_t row_num;
+    int64_t data_size;
+    int64_t index_size;
     KeyBoundsPB key_bounds;
 
     SegmentStatistics() = default;
