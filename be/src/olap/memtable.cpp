@@ -28,12 +28,11 @@
 
 #include "bvar/bvar.h"
 #include "common/config.h"
-#include "olap/memtable_memory_limiter.h"
 #include "olap/olap_define.h"
 #include "olap/tablet_schema.h"
 #include "runtime/descriptors.h"
 #include "runtime/exec_env.h"
-#include "runtime/thread_context.h"
+#include "runtime/load_channel_mgr.h"
 #include "tablet_meta.h"
 #include "util/runtime_profile.h"
 #include "util/stopwatch.hpp"
@@ -67,7 +66,7 @@ MemTable::MemTable(int64_t tablet_id, const TabletSchema* tablet_schema,
 #ifndef BE_TEST
     _insert_mem_tracker_use_hook = std::make_unique<MemTracker>(
             fmt::format("MemTableHookInsert:TabletId={}", std::to_string(tablet_id)),
-            ExecEnv::GetInstance()->memtable_memory_limiter()->mem_tracker());
+            ExecEnv::GetInstance()->load_channel_mgr()->mem_tracker());
 #else
     _insert_mem_tracker_use_hook = std::make_unique<MemTracker>(
             fmt::format("MemTableHookInsert:TabletId={}", std::to_string(tablet_id)));

@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "common/status.h"
-#include "olap/memtable_memory_limiter.h"
 #include "olap/options.h"
 #include "util/threadpool.h"
 
@@ -177,7 +176,6 @@ public:
     HeartbeatFlags* heartbeat_flags() { return _heartbeat_flags; }
     doris::vectorized::ScannerScheduler* scanner_scheduler() { return _scanner_scheduler; }
     FileMetaCache* file_meta_cache() { return _file_meta_cache; }
-    MemTableMemoryLimiter* memtable_memory_limiter() { return _memtable_memory_limiter.get(); }
 
     // only for unit test
     void set_master_info(TMasterInfo* master_info) { this->_master_info = master_info; }
@@ -263,7 +261,6 @@ private:
     BlockSpillManager* _block_spill_mgr = nullptr;
     // To save meta info of external file, such as parquet footer.
     FileMetaCache* _file_meta_cache = nullptr;
-    std::unique_ptr<MemTableMemoryLimiter> _memtable_memory_limiter;
 };
 
 template <>
