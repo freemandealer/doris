@@ -145,7 +145,6 @@ private:
     // make execute sequence
     std::mutex _lock;
 
-    SpinLock _tablet_writers_lock;
 
     enum State {
         kInitialized,
@@ -171,8 +170,10 @@ private:
     // currently it's OK.
     Status _close_status;
 
-    // tablet_id -> TabletChannel
-    std::unordered_map<int64_t, DeltaWriter*> _tablet_writers;
+    // tablet_id -> TabletChannel maps in shards
+    std::vector<std::unique_ptr<std::unordered_map<int64_t, std::shared_ptr<DeltaWriter>>>> _tablet_writers_maps;
+    // corresponding locks to protect each shard
+    std::vector<std::unique_ptr<SpinLock>> _tablet_writers_locks;
     // broken tablet ids.
     // If a tablet write fails, it's id will be added to this set.
     // So that following batch will not handle this tablet anymore.
@@ -183,8 +184,6 @@ private:
     std::unordered_set<int64_t> _reducing_tablets;
 
     std::unordered_set<int64_t> _partition_ids;
-
-    static std::atomic<uint64_t> _s_tablet_writer_count;
 
     bool _is_high_priority = false;
 
