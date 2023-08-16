@@ -147,8 +147,7 @@ Status TabletStream::close() {
     return _rowset_builder->close();
 }
 
-Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
-    int64_t tablet_id = header.tablet_id();
+Status IndexStream::open_tablet(int64_t partition_id, int64_t tablet_id) {
     TabletStreamSharedPtr tablet_stream;
     {
         std::lock_guard lock_guard(_lock);
@@ -157,10 +156,21 @@ Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data)
             tablet_stream =
                     std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _num_senders);
             _tablet_streams_map[tablet_id] = tablet_stream;
-            RETURN_IF_ERROR(tablet_stream->init(_schema.get(), _id, header.partition_id()));
-        } else {
-            tablet_stream = it->second;
+            RETURN_IF_ERROR(tablet_stream->init(_schema.get(), _id, partition_id));
         }
+    }
+
+    return Status::OK();
+}
+
+Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
+    int64_t tablet_id = header.tablet_id();
+    TabletStreamSharedPtr tablet_stream;
+    {
+        std::lock_guard lock_guard(_lock);
+        auto it = _tablet_streams_map.find(tablet_id);
+        DCHECK(it != _tablet_streams_map.end());
+        tablet_stream = it->second;
     }
 
     return tablet_stream->append_data(header, data);
@@ -203,6 +213,11 @@ Status LoadStream::init(const POpenStreamSinkRequest* request) {
         _index_streams_map[index.id()] =
                 std::make_shared<IndexStream>(_id, index.id(), _txn_id, _num_senders, _schema);
     }
+
+    for (const auto& req : request->tablets()) {
+        RETURN_IF_ERROR(open_tablet(req.index_id(), req.partition_id(), req.tablet_id()));
+    }
+
     LOG(INFO) << "succeed to init load stream " << *this;
     return Status::OK();
 }
@@ -282,6 +297,14 @@ void LoadStream::_parse_header(butil::IOBuf* const message, PStreamHeader& hdr) 
     hdr.ParseFromZeroCopyStream(&wrapper);
     // TODO: make it VLOG
     LOG(INFO) << "header parse result: " << hdr.DebugString();
+}
+
+Status LoadStream::open_tablet(int64_t index_id, int64_t partition_id, int64_t tablet_id) {
+    IndexStreamSharedPtr index_stream;
+    auto it = _index_streams_map.find(index_id);
+    DCHECK(it != _index_streams_map.end()); // we updated the map just now in init()
+    index_stream = it->second;
+    return index_stream->open_tablet(partition_id, tablet_id);
 }
 
 Status LoadStream::_append_data(const PStreamHeader& header, butil::IOBuf* data) {
