@@ -39,7 +39,8 @@ namespace doris {
 using SegIdMapping = std::vector<uint32_t>;
 class TabletStream {
 public:
-    TabletStream(PUniqueId load_id, int64_t id, int64_t txn_id, uint32_t num_senders);
+    TabletStream(PUniqueId load_id, int64_t id, int64_t txn_id, uint32_t num_senders,
+                 int64_t partition_id);
 
     Status init(OlapTableSchemaParam* schema, int64_t index_id, int64_t partition_id);
 
@@ -47,6 +48,7 @@ public:
     Status add_segment(const PStreamHeader& header, butil::IOBuf* data);
     Status close();
     int64_t id() { return _id; }
+    int64_t partition_id() { return _partition_id; }
 
     friend std::ostream& operator<<(std::ostream& ostr, const TabletStream& tablet_stream);
 
@@ -60,6 +62,7 @@ private:
     std::shared_ptr<Status> _failed_st;
     PUniqueId _load_id;
     int64_t _txn_id;
+    int64_t _partition_id;
 };
 
 using TabletStreamSharedPtr = std::shared_ptr<TabletStream>;
@@ -77,7 +80,8 @@ public:
     Status append_data(const PStreamHeader& header, butil::IOBuf* data);
 
     void flush(uint32_t sender_id);
-    void close(std::vector<int64_t>* success_tablet_ids, std::vector<int64_t>* failed_tablet_ids);
+    void close(std::vector<int64_t>* success_tablet_ids, std::vector<int64_t>* failed_tablet_ids,
+               const std::unordered_set<int64_t>& committing_partitions);
 
     Status open_tablet(int64_t partition_id, int64_t tablet_id);
 
@@ -89,7 +93,6 @@ private:
     PUniqueId _load_id;
     int64_t _txn_id;
     std::shared_ptr<OlapTableSchemaParam> _schema;
-    std::unordered_map<int64_t, int64_t> _tablet_partitions;
     std::vector<int64_t> _failed_tablet_ids;
 };
 using IndexStreamSharedPtr = std::shared_ptr<IndexStream>;
@@ -106,7 +109,8 @@ public:
     uint32_t remove_rpc_stream() { return --_num_rpc_streams; }
 
     Status close(uint32_t sender_id, std::vector<int64_t>* success_tablet_ids,
-                 std::vector<int64_t>* failed_tablet_ids);
+                 std::vector<int64_t>* failed_tablet_ids,
+                 const std::unordered_set<int64_t>& committing_partitions);
 
     // callbacks called by brpc
     int on_received_messages(StreamId id, butil::IOBuf* const messages[], size_t size) override;
