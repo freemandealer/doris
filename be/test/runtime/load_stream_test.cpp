@@ -1281,4 +1281,46 @@ TEST_F(LoadStreamMgrTest, two_client_one_close_before_the_other_open) {
     }
 }
 
+TEST_F(LoadStreamMgrTest, close_load_before_recv_eos) {
+    MockSinkClient client;
+    auto st = client.connect_stream();
+    EXPECT_TRUE(st.ok());
+
+    reset_response_stat();
+
+    // append data
+    butil::IOBuf append_buf;
+    PStreamHeader header;
+    std::string data = "file1 hello world 123 !@#$%^&*()_+";
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0,
+                     0, data, false);
+
+    EXPECT_EQ(g_response_stat.num, 0);
+    // CLOSE_LOAD before EOS
+    close_load(client);
+    wait_for_ack(1);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+
+    EXPECT_EQ(_load_stream_mgr->get_load_stream_num(), 0);
+
+    // then the late EOS, will not be handled
+    write_one_tablet(client, NORMAL_LOAD_ID, NORMAL_SENDER_ID, NORMAL_INDEX_ID, NORMAL_TABLET_ID, 0,
+                     data.length(), data, true);
+
+    // duplicated close, will not be handled
+    close_load(client);
+    wait_for_ack(2);
+    EXPECT_EQ(g_response_stat.num, 1);
+    EXPECT_EQ(g_response_stat.success_tablet_ids.size(), 0);
+    EXPECT_EQ(g_response_stat.failed_tablet_ids.size(), 1);
+
+    auto written_data = read_data(NORMAL_TXN_ID, NORMAL_PARTITION_ID, NORMAL_TABLET_ID, 0);
+    EXPECT_EQ(written_data, "");
+
+    // server will close stream on CLOSE_LOAD
+    wait_for_close();
+}
+
 } // namespace doris
