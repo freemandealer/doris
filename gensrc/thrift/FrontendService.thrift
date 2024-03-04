@@ -1399,7 +1399,7 @@ struct TShowProcessListResult {
     1: optional list<list<string>> process_list
 }
 
-struct TTableStatsReportRequest {
+struct TReportCommitTxnResultRequest {
     1: optional i64 dbId
     2: optional i64 txnId
     3: optional string label
@@ -1490,5 +1490,5 @@ service FrontendService {
     Status.TStatus invalidateStatsCache(1: TInvalidateFollowerStatsCacheRequest request)
 
     TShowProcessListResult showProcessList(1: TShowProcessListRequest request)
-    Status.TStatus tableStatsReport(1: TTableStatsReportRequest request)
+    Status.TStatus reportCommitTxnResult(1: TReportCommitTxnResultRequest request)
 }
