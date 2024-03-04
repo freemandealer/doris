@@ -21,6 +21,8 @@ import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.Table;
+import org.apache.doris.catalog.TableIf.TableType;
+import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.proto.Cloud.AbortTxnRequest;
 import org.apache.doris.cloud.proto.Cloud.AbortTxnResponse;
 import org.apache.doris.cloud.proto.Cloud.BeginTxnRequest;
@@ -341,6 +343,46 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                      txnState.getTransactionId(), tableStats.getTableId(), tableStats.getUpdatedRowCount());
             Env.getCurrentEnv().getAnalysisManager().updateUpdatedRows(tableStats.getTableId(),
                                                                        tableStats.getUpdatedRowCount());
+        }
+        // notify partition first load
+        int totalPartitionNum = commitTxnResponse.getPartitionIdsList().size();
+        // a map to record <tableId, [partitionIds]>
+        Map<Long, List<Long>> tablePartitionMap = Maps.newHashMap();
+        for (int idx = 0; idx < totalPartitionNum; ++idx) {
+            long version = commitTxnResponse.getVersions(idx);
+            if (version == 2) {
+                long tableId = commitTxnResponse.getTableIds(idx);
+                tablePartitionMap.computeIfAbsent(tableId, k -> Lists.newArrayList());
+                tablePartitionMap.get(tableId).add(commitTxnResponse.getPartitionIds(idx));
+                // 1. inform AnalysisManager
+                Env.getCurrentEnv().getAnalysisManager().setNewPartitionLoaded(tableId);
+                // 2. update CloudPartition
+                Env env = Env.getCurrentEnv();
+                OlapTable olapTable = (OlapTable) env.getInternalCatalog().getDb(dbId)
+                        .flatMap(db -> db.getTable(tableId)).filter(t -> t.getType() == TableType.OLAP)
+                        .orElse(null);
+                if (olapTable == null) {
+                    continue;
+                }
+                CloudPartition partition = (CloudPartition) olapTable.getPartition(
+                        commitTxnResponse.getPartitionIds(idx));
+                if (partition == null) {
+                    continue;
+                }
+                partition.setCachedVisibleVersion(2);
+            }
+        }
+        // tablePartitionMap to string
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Long, List<Long>> entry : tablePartitionMap.entrySet()) {
+            sb.append(entry.getKey()).append(":[");
+            for (Long partitionId : entry.getValue()) {
+                sb.append(partitionId).append(",");
+            }
+            sb.append("];");
+        }
+        if (sb.length() > 0) {
+            LOG.info("notify partition first load. {}", sb);
         }
     }
 
