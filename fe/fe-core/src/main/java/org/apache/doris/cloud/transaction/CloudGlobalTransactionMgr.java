@@ -37,6 +37,7 @@ import org.apache.doris.cloud.proto.Cloud.GetTxnRequest;
 import org.apache.doris.cloud.proto.Cloud.GetTxnResponse;
 import org.apache.doris.cloud.proto.Cloud.LoadJobSourceTypePB;
 import org.apache.doris.cloud.proto.Cloud.MetaServiceCode;
+import org.apache.doris.cloud.proto.Cloud.TableStatsPB;
 import org.apache.doris.cloud.proto.Cloud.TxnInfoPB;
 import org.apache.doris.cloud.proto.Cloud.UniqueIdPB;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
@@ -333,6 +334,13 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         if (MetricRepo.isInit) {
             MetricRepo.COUNTER_TXN_SUCCESS.increase(1L);
             MetricRepo.HISTO_TXN_EXEC_LATENCY.update(txnState.getCommitTime() - txnState.getPrepareTime());
+        }
+        // update rowCountfor AnalysisManager
+        for (TableStatsPB tableStats : commitTxnResponse.getTableStatsList()) {
+            LOG.info("Update RowCount for AnalysisManager. transactionId:{}, table_id:{}, updated_row_count:{}",
+                     txnState.getTransactionId(), tableStats.getTableId(), tableStats.getUpdatedRowCount());
+            Env.getCurrentEnv().getAnalysisManager().updateUpdatedRows(tableStats.getTableId(),
+                                                                       tableStats.getUpdatedRowCount());
         }
     }
 

@@ -356,11 +356,11 @@ struct TListTableStatusResult {
 
 struct TTableMetadataNameIds {
     1: optional string name
-    2: optional i64 id 
+    2: optional i64 id
 }
 
 struct TListTableMetadataNameIdsResult {
-    1: optional list<TTableMetadataNameIds> tables 
+    1: optional list<TTableMetadataNameIds> tables
 }
 
 // getTableNames returns a list of unqualified table names
@@ -1399,6 +1399,13 @@ struct TShowProcessListResult {
     1: optional list<list<string>> process_list
 }
 
+struct TTableStatsReportRequest {
+    1: optional i64 dbId
+    2: optional i64 txnId
+    3: optional string label
+    4: optional binary payload
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1483,4 +1490,5 @@ service FrontendService {
     Status.TStatus invalidateStatsCache(1: TInvalidateFollowerStatsCacheRequest request)
 
     TShowProcessListResult showProcessList(1: TShowProcessListRequest request)
+    Status.TStatus tableStatsReport(1: TTableStatsReportRequest request)
 }
