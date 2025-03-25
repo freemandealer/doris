@@ -216,7 +216,8 @@ BlockFileCache::BlockFileCache(const std::string& cache_base_path,
             _cache_base_path.c_str(), "file_cache_storage_async_remove_latency_us");
     _evict_in_advance_latency_us = std::make_shared<bvar::LatencyRecorder>(
             _cache_base_path.c_str(), "file_cache_evict_in_advance_latency_us");
-
+    _lru_dump_lock_latency_us = std::make_shared<bvar::LatencyRecorder>(
+            _cache_base_path.c_str(), "file_cache_lru_dump_lock_latency_us");
     _recycle_keys_length_recorder = std::make_shared<bvar::LatencyRecorder>(
             _cache_base_path.c_str(), "file_cache_recycle_keys_length");
 
@@ -348,6 +349,11 @@ Status BlockFileCache::initialize_unlocked(std::lock_guard<std::mutex>& cache_lo
     _cache_background_gc_thread = std::thread(&BlockFileCache::run_background_gc, this);
     _cache_background_evict_in_advance_thread =
             std::thread(&BlockFileCache::run_background_evict_in_advance, this);
+
+    // Initialize LRU dump thread and restore queues
+    _cache_background_lru_dump_thread = std::thread(&BlockFileCache::run_background_lru_dump, this);
+    // TODO: restored data should not overwrite the last dump
+    restore_lru_queues_from_disk();
 
     return Status::OK();
 }
@@ -1870,6 +1876,84 @@ void BlockFileCache::run_background_gc() {
         *_recycle_keys_length_recorder << _recycle_keys.size_approx();
         batch_count = 0;
     }
+}
+
+void BlockFileCache::run_background_lru_dump() {
+    while (!_close) {
+        LOG(INFO) << "OOXX START";
+        int64_t interval_ms = config::file_cache_background_lru_dump_interval_ms;
+        {
+            std::unique_lock close_lock(_close_mtx);
+            _close_cv.wait_for(close_lock, std::chrono::milliseconds(interval_ms));
+            if (_close) {
+                break;
+            }
+        }
+        LOG(INFO) << "OOXX";
+        // Dump each queue
+        auto dump_queue = [&](LRUQueue& queue, const std::string& queue_name) {
+            std::vector<std::tuple<UInt128Wrapper, size_t, size_t>> elements;
+            elements.reserve(config::file_cache_background_lru_dump_tail_record_num);
+
+            // Acquire mutex and copy elements
+            int64_t duration_ns = 0;
+            {
+                SCOPED_CACHE_LOCK(_mutex, this);
+                SCOPED_RAW_TIMER(&duration_ns);
+                /*
+                auto end_it = std::next(queue.begin(), std::min(queue.get_elements_num(cache_lock), static_cast<size_t>(config::file_cache_background_lru_dump_tail_record_num)));
+                std::transform(queue.begin(), end_it, std::back_inserter(elements), [](const auto& item) {
+                    return std::make_tuple(item.hash, item.offset, item.size);
+                });
+                */
+                size_t count = 0;
+                for (const auto& [hash, offset, size] : queue) {
+                    if (count++ >= config::file_cache_background_lru_dump_tail_record_num) break;
+                    elements.emplace_back(hash, offset, size);
+                }
+            }
+            *_lru_dump_lock_latency_us << (duration_ns / 1000);
+            LOG(WARNING) << (duration_ns / 1000);
+
+            // Write to disk
+            std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
+            std::ofstream out(filename, std::ios::binary);
+            if (out) {
+                for (const auto& [hash, offset, size] : elements) {
+                    out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
+                    out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+                    out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+                }
+            }
+        };
+
+        dump_queue(_disposable_queue, "disposable");
+        dump_queue(_index_queue, "index");
+        dump_queue(_normal_queue, "normal");
+        dump_queue(_ttl_queue, "ttl");
+    }
+}
+
+void BlockFileCache::restore_lru_queues_from_disk() {
+    auto restore_queue = [&](LRUQueue& queue, const std::string& queue_name) {
+        std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
+        std::ifstream in(filename, std::ios::binary);
+        if (in) {
+            UInt128Wrapper hash;
+            size_t offset, size;
+            while (in.read(reinterpret_cast<char*>(&hash), sizeof(hash)) &&
+                   in.read(reinterpret_cast<char*>(&offset), sizeof(offset)) &&
+                   in.read(reinterpret_cast<char*>(&size), sizeof(size))) {
+                SCOPED_CACHE_LOCK(_mutex, this);
+                queue.add(hash, offset, size, cache_lock);
+            }
+        }
+    };
+
+    restore_queue(_disposable_queue, "disposable");
+    restore_queue(_index_queue, "index");
+    restore_queue(_normal_queue, "normal");
+    restore_queue(_ttl_queue, "ttl");
 }
 
 void BlockFileCache::run_background_evict_in_advance() {
