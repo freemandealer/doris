@@ -115,6 +115,9 @@ public:
         if (_cache_background_lru_dump_thread.joinable()) {
             _cache_background_lru_dump_thread.join();
         }
+        if (_cache_background_lru_log_replay_thread.joinable()) {
+            _cache_background_lru_log_replay_thread.join();
+        }
     }
 
     /// Restore cache from local filesystem.
@@ -299,6 +302,23 @@ public:
         int64_t hot_data_interval {0};
     };
 
+    enum class CacheLRULogType {
+        ADD = 0, // all of the integer types
+        REMOVE = 1,
+        MOVETOBACK = 2,
+        INVALID = 3,
+    };
+
+    struct CacheLRULog {
+        CacheLRULogType type = CacheLRULogType::INVALID;
+        UInt128Wrapper hash;
+        size_t offset;
+
+        CacheLRULog(CacheLRULogType t, UInt128Wrapper h, size_t o) : type(t), hash(h), offset(o) {}
+    };
+
+    using CacheLRULogQueue = std::list<CacheLRULog>;
+
     using AccessRecord =
             std::unordered_map<AccessKeyAndOffset, LRUQueue::Iterator, KeyAndOffsetHash>;
 
@@ -394,6 +414,7 @@ private:
 
     BlockFileCache::LRUQueue& get_queue(FileCacheType type);
     const BlockFileCache::LRUQueue& get_queue(FileCacheType type) const;
+    CacheLRULogQueue& get_lru_log_queue(FileCacheType type);
 
     template <class T, class U>
         requires IsXLock<T> && IsXLock<U>
@@ -466,6 +487,7 @@ private:
     void run_background_monitor();
     void run_background_ttl_gc();
     void run_background_gc();
+    void run_background_lru_log_replay();
     void run_background_lru_dump();
     void restore_lru_queues_from_disk();
     void run_background_evict_in_advance();
@@ -494,6 +516,9 @@ private:
                                std::lock_guard<std::mutex>& cache_lock, size_t& cur_removed_size,
                                bool evict_in_advance);
 
+    void record_queue_event(CacheLRULogQueue& log_queue, CacheLRULogType log_type,
+                            const UInt128Wrapper hash, const size_t offset);
+
     // info
     std::string _cache_base_path;
     size_t _capacity = 0;
@@ -510,6 +535,7 @@ private:
     std::thread _cache_background_gc_thread;
     std::thread _cache_background_evict_in_advance_thread;
     std::thread _cache_background_lru_dump_thread;
+    std::thread _cache_background_lru_log_replay_thread;
     std::atomic_bool _async_open_done {false};
     // disk space or inode is less than the specified value
     bool _disk_resource_limit_mode {false};
@@ -535,9 +561,17 @@ private:
     LRUQueue _normal_queue;
     LRUQueue _disposable_queue;
     LRUQueue _ttl_queue;
+    LRUQueue _shadow_index_queue;
+    LRUQueue _shadow_normal_queue;
+    LRUQueue _shadow_disposable_queue;
+    LRUQueue _shadow_ttl_queue;
 
     // keys for async remove
     RecycleFileCacheKeys _recycle_keys;
+    CacheLRULogQueue _ttl_lru_log_queue;
+    CacheLRULogQueue _index_lru_log_queue;
+    CacheLRULogQueue _normal_lru_log_queue;
+    CacheLRULogQueue _disposable_lru_log_queue;
 
     // metrics
     std::shared_ptr<bvar::Status<size_t>> _cache_capacity_metrics;

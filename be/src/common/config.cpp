@@ -1083,6 +1083,7 @@ DEFINE_mInt64(file_cache_remove_block_qps_limit, "1000");
 DEFINE_mInt64(file_cache_background_gc_interval_ms, "100");
 DEFINE_mInt64(file_cache_background_lru_dump_interval_ms, "60000");
 DEFINE_mInt64(file_cache_background_lru_dump_tail_record_num, "5000");
+DEFINE_mInt64(file_cache_background_lru_log_replay_interval_ms, "1000");
 
 DEFINE_mInt32(index_cache_entry_stay_time_after_lookup_s, "1800");
 DEFINE_mInt32(inverted_index_cache_stale_sweep_time_sec, "600");

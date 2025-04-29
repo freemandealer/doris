@@ -355,6 +355,9 @@ Status BlockFileCache::initialize_unlocked(std::lock_guard<std::mutex>& cache_lo
     // TODO: restored data should not overwrite the last dump
     restore_lru_queues_from_disk();
 
+    _cache_background_lru_log_replay_thread =
+            std::thread(&BlockFileCache::run_background_lru_log_replay, this);
+
     return Status::OK();
 }
 
@@ -369,6 +372,9 @@ void BlockFileCache::use_cell(const FileBlockCell& cell, FileBlocks* result, boo
     if (cell.queue_iterator && move_iter_flag) {
         queue.move_to_end(*cell.queue_iterator, cache_lock);
     }
+    record_queue_event(get_lru_log_queue(cell.file_block->cache_type()),
+                       CacheLRULogType::MOVETOBACK, cell.file_block->_key.hash,
+                       cell.file_block->_key.offset);
 
     cell.update_atime();
 }
@@ -442,10 +448,14 @@ FileBlocks BlockFileCache::get_impl(const UInt128Wrapper& hash, const CacheConte
             if (st.ok()) {
                 auto& queue = get_queue(origin_type);
                 queue.remove(cell.queue_iterator.value(), cache_lock);
+                record_queue_event(get_lru_log_queue(origin_type), CacheLRULogType::REMOVE,
+                                   cell.file_block->get_hash_value(), cell.file_block->offset());
                 auto& ttl_queue = get_queue(FileCacheType::TTL);
                 cell.queue_iterator =
                         ttl_queue.add(cell.file_block->get_hash_value(), cell.file_block->offset(),
                                       cell.file_block->range().size(), cache_lock);
+                record_queue_event(get_lru_log_queue(FileCacheType::TTL), CacheLRULogType::ADD,
+                                   cell.file_block->get_hash_value(), cell.file_block->offset());
             } else {
                 LOG_WARNING("Failed to change key meta").error(st);
             }
@@ -482,11 +492,17 @@ FileBlocks BlockFileCache::get_impl(const UInt128Wrapper& hash, const CacheConte
                     if (cell.queue_iterator) {
                         auto& ttl_queue = get_queue(FileCacheType::TTL);
                         ttl_queue.remove(cell.queue_iterator.value(), cache_lock);
+                        record_queue_event(
+                                get_lru_log_queue(FileCacheType::TTL), CacheLRULogType::REMOVE,
+                                cell.file_block->get_hash_value(), cell.file_block->offset());
                     }
                     auto& queue = get_queue(FileCacheType::NORMAL);
                     cell.queue_iterator =
                             queue.add(cell.file_block->get_hash_value(), cell.file_block->offset(),
                                       cell.file_block->range().size(), cache_lock);
+                    record_queue_event(get_lru_log_queue(FileCacheType::NORMAL),
+                                       CacheLRULogType::ADD, cell.file_block->get_hash_value(),
+                                       cell.file_block->offset());
                 } else {
                     LOG_WARNING("Failed to change key meta").error(st);
                 }
@@ -792,6 +808,8 @@ BlockFileCache::FileBlockCell* BlockFileCache::add_cell(const UInt128Wrapper& ha
 
     auto& queue = get_queue(cell.file_block->cache_type());
     cell.queue_iterator = queue.add(hash, offset, size, cache_lock);
+    record_queue_event(get_lru_log_queue(cell.file_block->cache_type()), CacheLRULogType::ADD,
+                       cell.file_block->get_hash_value(), cell.file_block->offset());
 
     if (cell.file_block->cache_type() == FileCacheType::TTL) {
         if (_key_to_time.find(hash) == _key_to_time.end()) {
@@ -859,6 +877,22 @@ const BlockFileCache::LRUQueue& BlockFileCache::get_queue(FileCacheType type) co
         DCHECK(false);
     }
     return _normal_queue;
+}
+
+BlockFileCache::CacheLRULogQueue& BlockFileCache::get_lru_log_queue(FileCacheType type) {
+    switch (type) {
+    case FileCacheType::INDEX:
+        return _index_lru_log_queue;
+    case FileCacheType::DISPOSABLE:
+        return _disposable_lru_log_queue;
+    case FileCacheType::NORMAL:
+        return _normal_lru_log_queue;
+    case FileCacheType::TTL:
+        return _ttl_lru_log_queue;
+    default:
+        DCHECK(false);
+    }
+    return _normal_lru_log_queue;
 }
 
 void BlockFileCache::remove_file_blocks(std::vector<FileBlockCell*>& to_evict,
@@ -1073,11 +1107,17 @@ bool BlockFileCache::remove_if_ttl_file_blocks(const UInt128Wrapper& file_key, b
                 if (st.ok()) {
                     if (cell.queue_iterator) {
                         ttl_queue.remove(cell.queue_iterator.value(), cache_lock);
+                        record_queue_event(
+                                get_lru_log_queue(FileCacheType::TTL), CacheLRULogType::REMOVE,
+                                cell.file_block->get_hash_value(), cell.file_block->offset());
                     }
                     auto& queue = get_queue(FileCacheType::NORMAL);
                     cell.queue_iterator =
                             queue.add(cell.file_block->get_hash_value(), cell.file_block->offset(),
                                       cell.file_block->range().size(), cache_lock);
+                    record_queue_event(get_lru_log_queue(FileCacheType::NORMAL),
+                                       CacheLRULogType::ADD, cell.file_block->get_hash_value(),
+                                       cell.file_block->offset());
                 } else {
                     LOG_WARNING("Failed to change cache type to normal").error(st);
                 }
@@ -1360,6 +1400,8 @@ void BlockFileCache::remove(FileBlockSPtr file_block, T& cache_lock, U& block_lo
     if (cell->queue_iterator) {
         auto& queue = get_queue(file_block->cache_type());
         queue.remove(*cell->queue_iterator, cache_lock);
+        record_queue_event(get_lru_log_queue(file_block->cache_type()), CacheLRULogType::REMOVE,
+                           cell.file_block->get_hash_value(), cell.file_block->offset());
     }
     *_queue_evict_size_metrics[static_cast<int>(file_block->cache_type())]
             << file_block->range().size();
@@ -1566,9 +1608,14 @@ void BlockFileCache::change_cache_type(const UInt128Wrapper& hash, size_t offset
             auto& cur_queue = get_queue(cell.file_block->cache_type());
             DCHECK(cell.queue_iterator.has_value());
             cur_queue.remove(*cell.queue_iterator, cache_lock);
+            record_queue_event(get_lru_log_queue(cell.file_block->cache_type()),
+                               CacheLRULogType::REMOVE, cell.file_block->get_hash_value(),
+                               cell.file_block->offset());
             auto& new_queue = get_queue(new_type);
             cell.queue_iterator =
                     new_queue.add(hash, offset, cell.file_block->range().size(), cache_lock);
+            record_queue_event(get_lru_log_queue(new_type), CacheLRULogType::ADD,
+                               cell.file_block->get_hash_value(), cell.file_block->offset());
         }
     }
 }
@@ -1934,6 +1981,34 @@ void BlockFileCache::run_background_lru_dump() {
     }
 }
 
+void BlockFileCache::run_background_lru_log_replay() {
+    while (!_close) {
+        LOG(INFO) << "OOXX START";
+        int64_t interval_ms = config::file_cache_background_lru_log_replay_interval_ms;
+        {
+            std::unique_lock close_lock(_close_mtx);
+            _close_cv.wait_for(close_lock, std::chrono::milliseconds(interval_ms));
+            if (_close) {
+                break;
+            }
+        }
+        LOG(INFO) << "OOXX";
+        //TODO(zhengyu): replay log for each queue
+        /*
+        auto dump_queue = [&](LRUQueue& queue, const std::string& queue_name) {
+            
+        };
+
+        dump_queue(_disposable_queue, "disposable");
+        dump_queue(_index_queue, "index");
+        dump_queue(_normal_queue, "normal");
+        dump_queue(_ttl_queue, "ttl");
+        */
+
+        //TODO(zhengyu): add debug facilities to check diff between real and shadow queue
+    }
+}
+
 void BlockFileCache::restore_lru_queues_from_disk() {
     auto restore_queue = [&](LRUQueue& queue, const std::string& queue_name) {
         std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
@@ -2033,9 +2108,13 @@ void BlockFileCache::modify_expiration_time(const UInt128Wrapper& hash,
             if (st.ok()) {
                 auto& queue = get_queue(origin_type);
                 queue.remove(cell.queue_iterator.value(), cache_lock);
+                record_queue_event(get_lru_log_queue(origin_type), CacheLRULogType::REMOVE,
+                                   cell.file_block->get_hash_value(), cell.file_block->offset());
                 auto& ttl_queue = get_queue(FileCacheType::TTL);
                 cell.queue_iterator = ttl_queue.add(hash, cell.file_block->offset(),
                                                     cell.file_block->range().size(), cache_lock);
+                record_queue_event(get_lru_log_queue(FileCacheType::TTL), CacheLRULogType::ADD,
+                                   cell.file_block->get_hash_value(), cell.file_block->offset());
             }
             if (!st.ok()) {
                 LOG_WARNING("").error(st);
@@ -2179,6 +2258,11 @@ void BlockFileCache::update_ttl_atime(const UInt128Wrapper& hash) {
             cell.update_atime();
         }
     };
+}
+
+void BlockFileCache::record_queue_event(CacheLRULogQueue& log_queue, CacheLRULogType log_type,
+                                        const UInt128Wrapper hash, const size_t offset) {
+    log_queue.emplace_back(new CacheLRULog(log_type, hash, offset));
 }
 
 std::map<std::string, double> BlockFileCache::get_stats() {
