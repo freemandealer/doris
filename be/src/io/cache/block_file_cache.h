@@ -313,11 +313,13 @@ public:
         CacheLRULogType type = CacheLRULogType::INVALID;
         UInt128Wrapper hash;
         size_t offset;
+        size_t size;
 
-        CacheLRULog(CacheLRULogType t, UInt128Wrapper h, size_t o) : type(t), hash(h), offset(o) {}
+        CacheLRULog(CacheLRULogType t, UInt128Wrapper h, size_t o, size_t s)
+                : type(t), hash(h), offset(o), size(s) {}
     };
 
-    using CacheLRULogQueue = std::list<CacheLRULog>;
+    using CacheLRULogQueue = std::list<std::unique_ptr<CacheLRULog>>;
 
     using AccessRecord =
             std::unordered_map<AccessKeyAndOffset, LRUQueue::Iterator, KeyAndOffsetHash>;
@@ -517,7 +519,8 @@ private:
                                bool evict_in_advance);
 
     void record_queue_event(CacheLRULogQueue& log_queue, CacheLRULogType log_type,
-                            const UInt128Wrapper hash, const size_t offset);
+                            const UInt128Wrapper hash, const size_t offset, const size_t size);
+    void replay_queue_event(CacheLRULogQueue& log_queue, LRUQueue& shadown_queue);
 
     // info
     std::string _cache_base_path;
@@ -572,6 +575,7 @@ private:
     CacheLRULogQueue _index_lru_log_queue;
     CacheLRULogQueue _normal_lru_log_queue;
     CacheLRULogQueue _disposable_lru_log_queue;
+    std::mutex _mutex_lru_log;
 
     // metrics
     std::shared_ptr<bvar::Status<size_t>> _cache_capacity_metrics;
