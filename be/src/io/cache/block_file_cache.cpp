@@ -19,6 +19,8 @@
 // https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Cache/FileCache.cpp
 // and modified by Doris
 
+#include <cstdio>
+
 #include "common/status.h"
 #include "cpp/sync_point.h"
 #include "io/cache/block_file_cache.h"
@@ -353,7 +355,7 @@ Status BlockFileCache::initialize_unlocked(std::lock_guard<std::mutex>& cache_lo
     // Initialize LRU dump thread and restore queues
     _cache_background_lru_dump_thread = std::thread(&BlockFileCache::run_background_lru_dump, this);
     // TODO(zhengyu): restored data should not overwrite the last dump
-    restore_lru_queues_from_disk();
+    restore_lru_queues_from_disk(cache_lock);
 
     _cache_background_lru_log_replay_thread =
             std::thread(&BlockFileCache::run_background_lru_log_replay, this);
@@ -1971,13 +1973,20 @@ void BlockFileCache::run_background_lru_dump() {
             // Write to disk
             // TODO(zhengyu): use compatible and compact format like protobuf and add version & magic check
             // TODO(zhengyu): add ttl expiration time, currently use fixed expiration time 3h
-            std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
-            std::ofstream out(filename, std::ios::binary);
+            std::string tmp_filename =
+                    fmt::format("{}/lru_dump_{}.bin.tmp", _cache_base_path, queue_name);
+            std::string final_filename =
+                    fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
+            std::ofstream out(tmp_filename, std::ios::binary);
             if (out) {
                 for (const auto& [hash, offset, size] : elements) {
                     out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
                     out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
                     out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+                }
+                out.close();
+                if (std::rename(tmp_filename.c_str(), final_filename.c_str()) != 0) {
+                    std::remove(tmp_filename.c_str());
                 }
             }
         };
@@ -2011,7 +2020,7 @@ void BlockFileCache::run_background_lru_log_replay() {
     }
 }
 
-void BlockFileCache::restore_lru_queues_from_disk() {
+void BlockFileCache::restore_lru_queues_from_disk(std::lock_guard<std::mutex>& cache_lock) {
     auto restore_queue = [&](LRUQueue& queue, const std::string& queue_name) {
         std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
         std::ifstream in(filename, std::ios::binary);
@@ -2021,7 +2030,6 @@ void BlockFileCache::restore_lru_queues_from_disk() {
             while (in.read(reinterpret_cast<char*>(&hash), sizeof(hash)) &&
                    in.read(reinterpret_cast<char*>(&offset), sizeof(offset)) &&
                    in.read(reinterpret_cast<char*>(&size), sizeof(size))) {
-                SCOPED_CACHE_LOCK(_mutex, this);
                 CacheContext ctx;
                 if (queue_name == "ttl") {
                     ctx.cache_type = FileCacheType::TTL;
@@ -2288,7 +2296,7 @@ void BlockFileCache::record_queue_event(CacheLRULogQueue& log_queue, CacheLRULog
 }
 
 void BlockFileCache::replay_queue_event(CacheLRULogQueue& log_queue, LRUQueue& shadow_queue) {
-    // TODO(zhengyu): we don't need the real cache lock for the shadow queue, but we do need a lock to prevent read/write contension
+    // we don't need the real cache lock for the shadow queue, but we do need a lock to prevent read/write contension
     std::lock_guard<std::mutex> lru_log_lock(_mutex_lru_log);
     while (!log_queue.empty()) {
         auto log = std::move(log_queue.front());

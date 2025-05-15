@@ -22,10 +22,10 @@
 
 namespace doris::io {
 
-TEST_F(BlockFileCacheTest, test_lru_log_record_and_replay) {
+TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
     config::enable_evict_file_cache_in_advance = false;
     config::file_cache_enter_disk_resource_limit_mode_percent = 99;
-
+    config::file_cache_background_lru_dump_interval_ms = 3000;
     if (fs::exists(cache_base_path)) {
         fs::remove_all(cache_base_path);
     }
@@ -170,14 +170,14 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_and_replay) {
 
     // ok, let do some MOVETOBACK & REMOVE
     {
-        auto holder = cache.get_or_set(key4, 200000, 100000,
-                                       context4); // move dispsable queue 3rd element to the end
+        auto holder = cache.get_or_set(key2, 200000, 100000,
+                                       context2); // move index queue 3rd element to the end
         cache.remove_if_cached(key3);             // remove all element from ttl queue
     }
     ASSERT_EQ(cache._ttl_lru_log_queue.size(), 5);
-    ASSERT_EQ(cache._index_lru_log_queue.size(), 0);
+    ASSERT_EQ(cache._index_lru_log_queue.size(), 1);
     ASSERT_EQ(cache._normal_lru_log_queue.size(), 0);
-    ASSERT_EQ(cache._disposable_lru_log_queue.size(), 1);
+    ASSERT_EQ(cache._disposable_lru_log_queue.size(), 0);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(
             2 * config::file_cache_background_lru_log_replay_interval_ms));
@@ -188,8 +188,7 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_and_replay) {
 
     // check the order
     std::vector<size_t> offsets;
-    for (auto it = cache._shadow_disposable_queue.begin();
-         it != cache._shadow_disposable_queue.end(); ++it) {
+    for (auto it = cache._shadow_index_queue.begin(); it != cache._shadow_index_queue.end(); ++it) {
         offsets.push_back(it->offset);
     }
     ASSERT_EQ(offsets.size(), 5);
@@ -198,6 +197,170 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_and_replay) {
     ASSERT_EQ(offsets[2], 300000);
     ASSERT_EQ(offsets[3], 400000);
     ASSERT_EQ(offsets[4], 200000);
+
+    std::this_thread::sleep_for(
+            std::chrono::milliseconds(2 * config::file_cache_background_lru_dump_interval_ms));
+
+    // Verify all 4 dump files
+    {
+        std::string filename = fmt::format("{}/lru_dump_{}.bin", cache_base_path, "ttl");
+
+        struct stat file_stat;
+        EXPECT_EQ(stat(filename.c_str(), &file_stat), 0) << "File " << filename << " not found";
+
+        EXPECT_EQ(file_stat.st_size, 0) << "File " << filename << " is not empty";
+    }
+    {
+        std::string filename = fmt::format("{}/lru_dump_{}.bin", cache_base_path, "normal");
+
+        struct stat file_stat;
+        EXPECT_EQ(stat(filename.c_str(), &file_stat), 0) << "File " << filename << " not found";
+
+        EXPECT_GT(file_stat.st_size, 0) << "File " << filename << " is empty";
+
+        std::ifstream in(filename, std::ios::binary);
+        ASSERT_TRUE(in) << "Failed to open " << filename;
+        UInt128Wrapper hash;
+        size_t offset, size;
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 0) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 100000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 200000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 300000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 400000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        EXPECT_TRUE(in.fail()) << "still read from " << filename << " which should be EOF";
+    }
+
+    {
+        std::string filename = fmt::format("{}/lru_dump_{}.bin", cache_base_path, "index");
+
+        struct stat file_stat;
+        EXPECT_EQ(stat(filename.c_str(), &file_stat), 0) << "File " << filename << " not found";
+
+        EXPECT_GT(file_stat.st_size, 0) << "File " << filename << " is empty";
+
+        std::ifstream in(filename, std::ios::binary);
+        ASSERT_TRUE(in) << "Failed to open " << filename;
+        UInt128Wrapper hash;
+        size_t offset, size;
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 0) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 100000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 300000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 400000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
+        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
+        EXPECT_EQ(offset, 200000) << "wrong offset value in " << filename;
+        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
+
+        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
+        EXPECT_TRUE(in.fail()) << "still read from " << filename << " which should be EOF";
+    }
+
+    // dump looks good, let's try restore
+    io::BlockFileCache cache2(cache_base_path, settings);
+    ASSERT_TRUE(cache2.initialize());
+    for (i = 0; i < 100; i++) {
+        if (cache2.get_async_open_success()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(cache2.get_async_open_success());
+
+    // check the size of cache2
+    ASSERT_EQ(cache2._ttl_queue.get_elements_num_unsafe(), 0);
+    ASSERT_EQ(cache2._index_queue.get_elements_num_unsafe(), 5);
+    ASSERT_EQ(cache2._normal_queue.get_elements_num_unsafe(), 5);
+    ASSERT_EQ(cache2._disposable_queue.get_elements_num_unsafe(), 5);
+    ASSERT_EQ(cache2._cur_cache_size, 1500000);
+
+    // then check the order of restored cache2
+    std::vector<size_t> offsets2;
+    for (auto it = cache2._index_queue.begin(); it != cache2._index_queue.end(); ++it) {
+        offsets2.push_back(it->offset);
+    }
+    ASSERT_EQ(offsets2.size(), 5);
+    ASSERT_EQ(offsets2[0], 0);
+    ASSERT_EQ(offsets2[1], 100000);
+    ASSERT_EQ(offsets2[2], 300000);
+    ASSERT_EQ(offsets2[3], 400000);
+    ASSERT_EQ(offsets2[4], 200000);
 
     if (fs::exists(cache_base_path)) {
         fs::remove_all(cache_base_path);

@@ -491,7 +491,7 @@ private:
     void run_background_gc();
     void run_background_lru_log_replay();
     void run_background_lru_dump();
-    void restore_lru_queues_from_disk();
+    void restore_lru_queues_from_disk(std::lock_guard<std::mutex>& cache_lock);
     void run_background_evict_in_advance();
 
     bool try_reserve_from_other_queue_by_time_interval(FileCacheType cur_type,
