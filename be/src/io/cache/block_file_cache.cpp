@@ -218,8 +218,8 @@ BlockFileCache::BlockFileCache(const std::string& cache_base_path,
             _cache_base_path.c_str(), "file_cache_storage_async_remove_latency_us");
     _evict_in_advance_latency_us = std::make_shared<bvar::LatencyRecorder>(
             _cache_base_path.c_str(), "file_cache_evict_in_advance_latency_us");
-    _lru_dump_lock_latency_us = std::make_shared<bvar::LatencyRecorder>(
-            _cache_base_path.c_str(), "file_cache_lru_dump_lock_latency_us");
+    _lru_dump_latency_us = std::make_shared<bvar::LatencyRecorder>(
+            _cache_base_path.c_str(), "file_cache_lru_dump_latency_us");
     _recycle_keys_length_recorder = std::make_shared<bvar::LatencyRecorder>(
             _cache_base_path.c_str(), "file_cache_recycle_keys_length");
 
@@ -345,6 +345,15 @@ Status BlockFileCache::initialize() {
 Status BlockFileCache::initialize_unlocked(std::lock_guard<std::mutex>& cache_lock) {
     DCHECK(!_is_initialized);
     _is_initialized = true;
+    if (config::file_cache_background_lru_dump_tail_record_num > 0) {
+        // requirements:
+        // 1. restored data should not overwrite the last dump
+        // 2. restore should happen before load and async load
+        // 3. all queues should be restored sequencially to avoid conflict
+        // TODO(zhengyu): we can parralize them but will increase complexity, so lets check the time cost
+        // to see if any improvement is a necessary
+        restore_lru_queues_from_disk(cache_lock);
+    }
     RETURN_IF_ERROR(_storage->init(this));
     _cache_background_monitor_thread = std::thread(&BlockFileCache::run_background_monitor, this);
     _cache_background_ttl_gc_thread = std::thread(&BlockFileCache::run_background_ttl_gc, this);
@@ -354,9 +363,6 @@ Status BlockFileCache::initialize_unlocked(std::lock_guard<std::mutex>& cache_lo
 
     // Initialize LRU dump thread and restore queues
     _cache_background_lru_dump_thread = std::thread(&BlockFileCache::run_background_lru_dump, this);
-    // TODO(zhengyu): restored data should not overwrite the last dump
-    restore_lru_queues_from_disk(cache_lock);
-
     _cache_background_lru_log_replay_thread =
             std::thread(&BlockFileCache::run_background_lru_log_replay, this);
 
@@ -1935,7 +1941,6 @@ void BlockFileCache::run_background_gc() {
 
 void BlockFileCache::run_background_lru_dump() {
     while (!_close) {
-        LOG(INFO) << "OOXX START";
         int64_t interval_ms = config::file_cache_background_lru_dump_interval_ms;
         {
             std::unique_lock close_lock(_close_mtx);
@@ -1944,63 +1949,65 @@ void BlockFileCache::run_background_lru_dump() {
                 break;
             }
         }
-        LOG(INFO) << "OOXX";
+
         // Dump each queue
         auto dump_queue = [&](LRUQueue& queue, const std::string& queue_name) {
             std::vector<std::tuple<UInt128Wrapper, size_t, size_t>> elements;
             elements.reserve(config::file_cache_background_lru_dump_tail_record_num);
 
             // Acquire mutex and copy elements
-            int64_t duration_ns = 0;
+
             {
                 std::lock_guard<std::mutex> lru_log_lock(_mutex_lru_log);
-                SCOPED_RAW_TIMER(&duration_ns);
-                /*
-                auto end_it = std::next(queue.begin(), std::min(queue.get_elements_num(cache_lock), static_cast<size_t>(config::file_cache_background_lru_dump_tail_record_num)));
-                std::transform(queue.begin(), end_it, std::back_inserter(elements), [](const auto& item) {
-                    return std::make_tuple(item.hash, item.offset, item.size);
-                });
-                */
+
                 size_t count = 0;
                 for (const auto& [hash, offset, size] : queue) {
                     if (count++ >= config::file_cache_background_lru_dump_tail_record_num) break;
                     elements.emplace_back(hash, offset, size);
                 }
             }
-            *_lru_dump_lock_latency_us << (duration_ns / 1000);
-            LOG(WARNING) << (duration_ns / 1000);
 
             // Write to disk
             // TODO(zhengyu): use compatible and compact format like protobuf and add version & magic check
             // TODO(zhengyu): add ttl expiration time, currently use fixed expiration time 3h
-            std::string tmp_filename =
-                    fmt::format("{}/lru_dump_{}.bin.tmp", _cache_base_path, queue_name);
-            std::string final_filename =
-                    fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
-            std::ofstream out(tmp_filename, std::ios::binary);
-            if (out) {
-                for (const auto& [hash, offset, size] : elements) {
-                    out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
-                    out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
-                    out.write(reinterpret_cast<const char*>(&size), sizeof(size));
-                }
-                out.close();
-                if (std::rename(tmp_filename.c_str(), final_filename.c_str()) != 0) {
-                    std::remove(tmp_filename.c_str());
+            int64_t duration_ns = 0;
+            std::uintmax_t file_size = 0;
+            {
+                SCOPED_RAW_TIMER(&duration_ns);
+                std::string tmp_filename =
+                        fmt::format("{}/lru_dump_{}.bin.tmp", _cache_base_path, queue_name);
+                std::string final_filename =
+                        fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
+                std::ofstream out(tmp_filename, std::ios::binary);
+                if (out) {
+                    for (const auto& [hash, offset, size] : elements) {
+                        out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
+                        out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+                        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+                    }
+                    out.close();
+                    if (std::rename(tmp_filename.c_str(), final_filename.c_str()) != 0) {
+                        std::remove(tmp_filename.c_str());
+                        file_size = std::filesystem::file_size(final_filename);
+                    }
                 }
             }
-        };
+            *_lru_dump_latency_us << (duration_ns / 1000);
+            LOG(INFO) << fmt::format("lru dump for {} size={} time={}us", queue_name, file_size,
+                                     duration_ns / 1000);
+        }; // end of lambda
 
-        dump_queue(_shadow_disposable_queue, "disposable");
-        dump_queue(_shadow_index_queue, "index");
-        dump_queue(_shadow_normal_queue, "normal");
-        dump_queue(_shadow_ttl_queue, "ttl");
+        if (config::file_cache_background_lru_dump_tail_record_num > 0) {
+            dump_queue(_shadow_disposable_queue, "disposable");
+            dump_queue(_shadow_index_queue, "index");
+            dump_queue(_shadow_normal_queue, "normal");
+            dump_queue(_shadow_ttl_queue, "ttl");
+        }
     }
 }
 
 void BlockFileCache::run_background_lru_log_replay() {
     while (!_close) {
-        LOG(INFO) << "OOXX START";
         int64_t interval_ms = config::file_cache_background_lru_log_replay_interval_ms;
         {
             std::unique_lock close_lock(_close_mtx);
@@ -2009,7 +2016,6 @@ void BlockFileCache::run_background_lru_log_replay() {
                 break;
             }
         }
-        LOG(INFO) << "OOXX";
 
         replay_queue_event(_ttl_lru_log_queue, _shadow_ttl_queue);
         replay_queue_event(_index_lru_log_queue, _shadow_index_queue);
@@ -2024,7 +2030,10 @@ void BlockFileCache::restore_lru_queues_from_disk(std::lock_guard<std::mutex>& c
     auto restore_queue = [&](LRUQueue& queue, const std::string& queue_name) {
         std::string filename = fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
         std::ifstream in(filename, std::ios::binary);
+        int64_t duration_ns = 0;
         if (in) {
+            LOG(INFO) << "lru dump file is founded for " << queue_name << ". starting lru restore.";
+            SCOPED_RAW_TIMER(&duration_ns);
             UInt128Wrapper hash;
             size_t offset, size;
             while (in.read(reinterpret_cast<char*>(&hash), sizeof(hash)) &&
@@ -2049,7 +2058,10 @@ void BlockFileCache::restore_lru_queues_from_disk(std::lock_guard<std::mutex>& c
                 }
                 add_cell(hash, ctx, offset, size, FileBlock::State::DOWNLOADED, cache_lock);
             }
+        } else {
+            LOG(INFO) << "no lru dump file is founded for " << queue_name;
         }
+        LOG(INFO) << "lru restore time costs: " << (duration_ns / 1000 / 1000) << "ms.";
     };
 
     restore_queue(_disposable_queue, "disposable");

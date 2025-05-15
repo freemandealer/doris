@@ -362,6 +362,22 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
     ASSERT_EQ(offsets2[3], 400000);
     ASSERT_EQ(offsets2[4], 200000);
 
+    io::CacheContext context22;
+    context22.stats = &rstats;
+    context22.cache_type = io::FileCacheType::INDEX;
+    context22.query_id = query_id;
+
+    offset = 0;
+
+    for (; offset < 500000; offset += 100000) {
+        auto holder = cache2.get_or_set(key2, offset, 100000, context22);
+        auto blocks = fromHolder(holder);
+        ASSERT_EQ(blocks.size(), 1);
+        assert_range(2, blocks[0], io::FileBlock::Range(offset, offset + 99999),
+                     io::FileBlock::State::DOWNLOADED);
+        blocks.clear();
+    }
+
     if (fs::exists(cache_base_path)) {
         fs::remove_all(cache_base_path);
     }

@@ -618,7 +618,7 @@ private:
     std::shared_ptr<bvar::LatencyRecorder> _storage_async_remove_latency_us;
     std::shared_ptr<bvar::LatencyRecorder> _evict_in_advance_latency_us;
     std::shared_ptr<bvar::LatencyRecorder> _recycle_keys_length_recorder;
-    std::shared_ptr<bvar::LatencyRecorder> _lru_dump_lock_latency_us;
+    std::shared_ptr<bvar::LatencyRecorder> _lru_dump_latency_us;
 };
 
 } // namespace doris::io
