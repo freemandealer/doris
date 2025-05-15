@@ -22,6 +22,21 @@
 
 namespace doris::io {
 
+void verify_entry(std::ifstream& in, const UInt128Wrapper& expected_hash, size_t expected_offset,
+                  size_t expected_size) {
+    cloud::LruDumpEntryPB entry;
+
+    ASSERT_TRUE(BlockFileCache::read_one_lru_dump_entry(in, entry).ok());
+
+    UInt128Wrapper hash;
+    ProtoToUInt128Wrapper(entry.hash(), &hash);
+    LOG(INFO) << hash.to_string();
+
+    EXPECT_EQ(hash, expected_hash) << "wrong hash value";
+    EXPECT_EQ(entry.offset(), expected_offset) << "wrong offset value";
+    EXPECT_EQ(entry.size(), expected_size) << "wrong size value";
+}
+
 TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
     config::enable_evict_file_cache_in_advance = false;
     config::file_cache_enter_disk_resource_limit_mode_percent = 99;
@@ -208,7 +223,7 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
         struct stat file_stat;
         EXPECT_EQ(stat(filename.c_str(), &file_stat), 0) << "File " << filename << " not found";
 
-        EXPECT_EQ(file_stat.st_size, 0) << "File " << filename << " is not empty";
+        EXPECT_LT(file_stat.st_size, 10) << "File " << filename << " is not empty";
     }
     {
         std::string filename = fmt::format("{}/lru_dump_{}.bin", cache_base_path, "normal");
@@ -220,53 +235,14 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
 
         std::ifstream in(filename, std::ios::binary);
         ASSERT_TRUE(in) << "Failed to open " << filename;
+
+        verify_entry(in, io::BlockFileCache::hash("key1"), 0, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key1"), 100000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key1"), 200000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key1"), 300000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key1"), 400000, 100000);
+
         UInt128Wrapper hash;
-        size_t offset, size;
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 0) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 100000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 200000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 300000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key1")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 400000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
         in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
         EXPECT_TRUE(in.fail()) << "still read from " << filename << " which should be EOF";
     }
@@ -281,53 +257,14 @@ TEST_F(BlockFileCacheTest, test_lru_log_record_replay_dump_restore) {
 
         std::ifstream in(filename, std::ios::binary);
         ASSERT_TRUE(in) << "Failed to open " << filename;
+
+        verify_entry(in, io::BlockFileCache::hash("key2"), 0, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key2"), 100000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key2"), 300000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key2"), 400000, 100000);
+        verify_entry(in, io::BlockFileCache::hash("key2"), 200000, 100000);
+
         UInt128Wrapper hash;
-        size_t offset, size;
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 0) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 100000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 300000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 400000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
-        in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
-        in.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        in.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-        EXPECT_FALSE(in.fail()) << "Failed to read from " << filename;
-        EXPECT_EQ(hash, io::BlockFileCache::hash("key2")) << "wrong hash value in " << filename;
-        EXPECT_EQ(offset, 200000) << "wrong offset value in " << filename;
-        EXPECT_EQ(size, 100000) << "wrong size value in " << filename;
-
         in.read(reinterpret_cast<char*>(&hash), sizeof(hash));
         EXPECT_TRUE(in.fail()) << "still read from " << filename << " which should be EOF";
     }

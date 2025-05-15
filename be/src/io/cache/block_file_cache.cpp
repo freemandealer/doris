@@ -1,4 +1,3 @@
-#include <fstream>
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -19,11 +18,13 @@
 // https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Cache/FileCache.cpp
 // and modified by Doris
 
+#include "io/cache/block_file_cache.h"
+
 #include <cstdio>
+#include <fstream>
 
 #include "common/status.h"
 #include "cpp/sync_point.h"
-#include "io/cache/block_file_cache.h"
 
 #if defined(__APPLE__)
 #include <sys/mount.h>
@@ -1939,6 +1940,85 @@ void BlockFileCache::run_background_gc() {
     }
 }
 
+void UInt128WrapperToProto(const UInt128Wrapper& src, cloud::UInt128WrapperPB* dst) {
+    dst->set_high(src.value_ >> 64);
+    dst->set_low(src.value_ & 0xFFFFFFFFFFFFFFFF);
+}
+
+void ProtoToUInt128Wrapper(const cloud::UInt128WrapperPB& src, UInt128Wrapper* dst) {
+    dst->value_ = (static_cast<uint128_t>(src.high()) << 64) | src.low();
+}
+
+Status BlockFileCache::write_one_lru_dump_entry(std::ofstream& output,
+                                                const cloud::LruDumpEntryPB& message) {
+    if (!output.good()) {
+        LOG(ERROR) << "Output stream is not in a good state.";
+        return Status::InternalError("Output stream error");
+    }
+
+    google::protobuf::io::OstreamOutputStream zero_copy_output(&output);
+    google::protobuf::io::CodedOutputStream coded_output(&zero_copy_output);
+
+    uint32_t length = message.ByteSizeLong();
+    coded_output.WriteVarint32(length);
+
+    if (!message.SerializeToCodedStream(&coded_output)) {
+        LOG(ERROR) << "Failed to serialize message to file.";
+        return Status::InternalError("Failed to serialize message");
+    }
+
+    // Check if the underlying stream is still good
+    if (!output.good()) {
+        LOG(ERROR) << "Failed to write message to file.";
+        return Status::InternalError("Failed to write message to file");
+    }
+
+    return Status::OK();
+}
+
+Status BlockFileCache::read_one_lru_dump_entry(std::ifstream& input,
+                                               cloud::LruDumpEntryPB& message) {
+    if (!input.good()) {
+        LOG(ERROR) << "Input stream is not in a good state.";
+        return Status::InternalError("Input stream error");
+    }
+
+    google::protobuf::io::IstreamInputStream zero_copy_input(&input);
+    google::protobuf::io::CodedInputStream coded_input(&zero_copy_input);
+
+    uint32_t length = 0;
+    if (!coded_input.ReadVarint32(&length)) {
+        LOG(ERROR) << "Failed to read message length from file.";
+        return Status::InternalError("Failed to read message length");
+    }
+
+    google::protobuf::io::CodedInputStream::Limit limit = coded_input.PushLimit(length);
+    if (!message.ParseFromCodedStream(&coded_input)) {
+        LOG(ERROR) << "Failed to parse message from file.";
+        return Status::InternalError("Failed to deserialize message");
+    }
+
+    coded_input.PopLimit(limit);
+
+    // Check if the underlying stream is still good
+    if (!input.good()) {
+        LOG(ERROR) << "Failed to read message from file.";
+        std::ios::iostate state = input.rdstate();
+        if (state & std::ios::eofbit) {
+            LOG(ERROR) << "End of file reached.";
+        }
+        if (state & std::ios::failbit) {
+            LOG(ERROR) << "Input/output operation failed.";
+        }
+        if (state & std::ios::badbit) {
+            LOG(ERROR) << "Serious I/O error occurred.";
+        }
+        return Status::InternalError("Failed to read message from file");
+    }
+
+    return Status::OK();
+}
+
 void BlockFileCache::run_background_lru_dump() {
     while (!_close) {
         int64_t interval_ms = config::file_cache_background_lru_dump_interval_ms;
@@ -1955,8 +2035,6 @@ void BlockFileCache::run_background_lru_dump() {
             std::vector<std::tuple<UInt128Wrapper, size_t, size_t>> elements;
             elements.reserve(config::file_cache_background_lru_dump_tail_record_num);
 
-            // Acquire mutex and copy elements
-
             {
                 std::lock_guard<std::mutex> lru_log_lock(_mutex_lru_log);
 
@@ -1968,7 +2046,6 @@ void BlockFileCache::run_background_lru_dump() {
             }
 
             // Write to disk
-            // TODO(zhengyu): use compatible and compact format like protobuf and add version & magic check
             // TODO(zhengyu): add ttl expiration time, currently use fixed expiration time 3h
             int64_t duration_ns = 0;
             std::uintmax_t file_size = 0;
@@ -1980,16 +2057,43 @@ void BlockFileCache::run_background_lru_dump() {
                         fmt::format("{}/lru_dump_{}.bin", _cache_base_path, queue_name);
                 std::ofstream out(tmp_filename, std::ios::binary);
                 if (out) {
+                    // Write data entries
                     for (const auto& [hash, offset, size] : elements) {
-                        out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
-                        out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
-                        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+                        cloud::LruDumpEntryPB entry;
+                        auto proto_hash = std::make_unique<cloud::UInt128WrapperPB>();
+                        UInt128WrapperToProto(hash, proto_hash.get());
+                        entry.set_allocated_hash(proto_hash.release());
+                        entry.set_offset(offset);
+                        entry.set_size(size);
+                        if (!BlockFileCache::write_one_lru_dump_entry(out, entry).ok()) {
+                            LOG(WARNING) << "dump serialize entry failed: " << tmp_filename;
+                            std::remove(tmp_filename.c_str());
+                            out.close();
+                            return;
+                        }
                     }
+
+                    // Write footer
+                    cloud::LruDumpFooterPB footer;
+                    footer.set_entry_num(elements.size());
+                    footer.set_version(1);
+                    footer.set_magic("DOR");
+                    if (!footer.SerializeToOstream(&out)) {
+                        std::remove(tmp_filename.c_str());
+                        LOG(WARNING) << "dump serialize footer failed: " << tmp_filename;
+                        out.close();
+                        return;
+                    }
+
                     out.close();
                     if (std::rename(tmp_filename.c_str(), final_filename.c_str()) != 0) {
                         std::remove(tmp_filename.c_str());
                         file_size = std::filesystem::file_size(final_filename);
                     }
+                } else {
+                    LOG(WARNING) << "open file to dump failed: " << tmp_filename;
+                    out.close();
+                    return;
                 }
             }
             *_lru_dump_latency_us << (duration_ns / 1000);
@@ -2034,16 +2138,35 @@ void BlockFileCache::restore_lru_queues_from_disk(std::lock_guard<std::mutex>& c
         if (in) {
             LOG(INFO) << "lru dump file is founded for " << queue_name << ". starting lru restore.";
             SCOPED_RAW_TIMER(&duration_ns);
-            UInt128Wrapper hash;
-            size_t offset, size;
-            while (in.read(reinterpret_cast<char*>(&hash), sizeof(hash)) &&
-                   in.read(reinterpret_cast<char*>(&offset), sizeof(offset)) &&
-                   in.read(reinterpret_cast<char*>(&size), sizeof(size))) {
+
+            cloud::LruDumpFooterPB footer;
+            if (!footer.ParseFromIstream(&in)) {
+                LOG(WARNING) << "Failed to parse lru dump footer for " << queue_name;
+                return;
+            }
+
+            if (footer.magic() != "DOR") {
+                LOG(WARNING) << "Invalid magic in lru dump footer for " << queue_name;
+                return;
+            }
+
+            LOG(INFO) << "lru dump footer parsed for " << queue_name
+                      << ", entry_num: " << footer.entry_num() << ", version: " << footer.version();
+
+            cloud::LruDumpEntryPB entry;
+            for (int i = 0; i < footer.entry_num(); ++i) {
+                auto s = BlockFileCache::read_one_lru_dump_entry(in, entry);
+                if (!s.ok()) {
+                    return;
+                }
+                UInt128Wrapper hash;
+                ProtoToUInt128Wrapper(entry.hash(), &hash);
+
                 CacheContext ctx;
                 if (queue_name == "ttl") {
                     ctx.cache_type = FileCacheType::TTL;
-                    ctx.expiration_time =
-                            10800; // TODO(zhengyu): we haven't persist expiration time yet, use 3h default
+                    // TODO(zhengyu): we haven't persist expiration time yet, use 3h default
+                    ctx.expiration_time = 10800;
                     // TODO(zhengyu): we don't use stats yet, see if this will cause any problem
                 } else if (queue_name == "index") {
                     ctx.cache_type = FileCacheType::INDEX;
@@ -2056,7 +2179,8 @@ void BlockFileCache::restore_lru_queues_from_disk(std::lock_guard<std::mutex>& c
                     DCHECK(false);
                     return;
                 }
-                add_cell(hash, ctx, offset, size, FileBlock::State::DOWNLOADED, cache_lock);
+                add_cell(hash, ctx, entry.offset(), entry.size(), FileBlock::State::DOWNLOADED,
+                         cache_lock);
             }
         } else {
             LOG(INFO) << "no lru dump file is founded for " << queue_name;

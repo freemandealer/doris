@@ -19,6 +19,8 @@
 // and modified by Doris
 
 #pragma once
+#include <gen_cpp/cloud.pb.h>
+
 #include "io/io_common.h"
 #include "vec/common/uint128.h"
 
@@ -49,6 +51,9 @@ struct UInt128Wrapper {
 
     bool operator==(const UInt128Wrapper& other) const { return value_ == other.value_; }
 };
+
+extern void UInt128WrapperToProto(const UInt128Wrapper& src, cloud::UInt128WrapperPB* dst);
+extern void ProtoToUInt128Wrapper(const cloud::UInt128WrapperPB& src, UInt128Wrapper* dst);
 
 struct ReadStatistics {
     bool hit_cache = true;

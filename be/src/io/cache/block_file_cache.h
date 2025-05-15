@@ -199,6 +199,11 @@ public:
     bool try_reserve(const UInt128Wrapper& hash, const CacheContext& context, size_t offset,
                      size_t size, std::lock_guard<std::mutex>& cache_lock);
 
+    static Status write_one_lru_dump_entry(std::ofstream& output,
+                                           const cloud::LruDumpEntryPB& message);
+
+    static Status read_one_lru_dump_entry(std::ifstream& input, cloud::LruDumpEntryPB& message);
+
     /**
      * Proactively evict cache blocks to free up space before cache is full.
      * 
