@@ -28,7 +28,7 @@ suite("test_ttl") {
     assertTrue(!clusters.isEmpty())
     def validCluster = clusters[0][0]
     sql """use @${validCluster};""";
-    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="180") """
+    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="300") """
     String[][] backends = sql """ show backends """
     String backendId;
     def backendIdToBackendIP = [:]
@@ -148,7 +148,7 @@ suite("test_ttl") {
             assertTrue(flag1)
             assertTrue(ttl_cache_size > 1073741824)
     }
-    sleep(180000)
+    sleep(300000)
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")

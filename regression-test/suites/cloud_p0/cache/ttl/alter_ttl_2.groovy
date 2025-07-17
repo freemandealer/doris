@@ -28,7 +28,7 @@ suite("alter_ttl_2") {
     assertTrue(!clusters.isEmpty())
     def validCluster = clusters[0][0]
     sql """use @${validCluster};""";
-    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="300") """
+    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="350") """
     String[][] backends = sql """ show backends """
     String backendId;
     def backendIdToBackendIP = [:]

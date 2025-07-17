@@ -83,7 +83,7 @@ def clearFileCache = { check_func ->
         )
         DUPLICATE KEY(C_CUSTKEY, C_NAME)
         DISTRIBUTED BY HASH(C_CUSTKEY) BUCKETS 32
-        PROPERTIES("file_cache_ttl_seconds"="180","disable_auto_compaction" = "true")
+        PROPERTIES("file_cache_ttl_seconds"="300","disable_auto_compaction" = "true")
     """
     sql """ create table customer_ttl like customer_ttl_like """
 
@@ -141,7 +141,7 @@ def clearFileCache = { check_func ->
             }
             assertTrue(flag1)
     }
-    sleep(180000)
+    sleep(300000)
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")

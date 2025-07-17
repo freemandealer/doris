@@ -28,7 +28,7 @@ suite("alter_ttl_1") {
     assertTrue(!clusters.isEmpty())
     def validCluster = clusters[0][0]
     sql """use @${validCluster};""";
-    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="90") """
+    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="300") """
     String[][] backends = sql """ show backends """
     String backendId;
     def backendIdToBackendIP = [:]
@@ -132,7 +132,7 @@ suite("alter_ttl_1") {
             assertTrue(flag1)
     }
     sql """ ALTER TABLE customer_ttl SET ("file_cache_ttl_seconds"="140") """
-    sleep(80000)
+    sleep(140000)
     // after 110s, the first load has translate to normal
     getMetricsMethod.call() {
         respCode, body ->

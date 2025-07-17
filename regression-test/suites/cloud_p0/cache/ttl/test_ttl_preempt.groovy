@@ -28,7 +28,7 @@ suite("test_ttl_preempt") {
     assertTrue(!clusters.isEmpty())
     def validCluster = clusters[0][0]
     sql """use @${validCluster};""";
-    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="120") """
+    def ttlProperties = """ PROPERTIES("file_cache_ttl_seconds"="12000") """
     String[][] backends = sql """ show backends """
     String backendId;
     def backendIdToBackendIP = [:]
@@ -131,13 +131,8 @@ suite("test_ttl_preempt") {
         respCode, body -> {}
     }
 
-    // one customer table would take about 1.3GB, the total cache size is 20GB
-    // the following would take 19.5G all
-    load_customer_once("customer")
-    load_customer_once("customer")
-    load_customer_once("customer")
-    load_customer_once("customer")
-    load_customer_once("customer")
+    // one customer table would take about 2.3GB, the total cache size is 20GB
+    // the following would take 23G all
     load_customer_once("customer")
     load_customer_once("customer")
     load_customer_once("customer")
@@ -170,7 +165,7 @@ suite("test_ttl_preempt") {
     }
     // will cache all datas
     load_customer_ttl_once("customer_ttl")
-    sleep(30000)
+    sleep(20000)
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
