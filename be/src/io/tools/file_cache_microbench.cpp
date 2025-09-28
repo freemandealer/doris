@@ -1312,8 +1312,7 @@ private:
                                 file_size = exist_job_perfile_size;
                             }
 
-// TODO(dengxin): fix verify
-#if 0
+#if 0 // TODO(dengxin): fix verify \
         // Verify read data
                             if (!DataVerifier::verify_data(key, file_size, read_offset, read_buffer,
                                                            read_length)) {
