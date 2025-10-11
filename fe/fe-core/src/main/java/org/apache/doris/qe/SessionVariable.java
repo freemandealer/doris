@@ -441,9 +441,9 @@ public class SessionVariable implements Serializable, Writable {
     public static final String TOPN_FILTER_RATIO = "topn_filter_ratio";
     public static final String ENABLE_SNAPSHOT_POINT_QUERY = "enable_snapshot_point_query";
 
-    public static final String ENABLE_FILE_CACHE = "enable_file_cache";
+    public static final String ENABLE_EXTERNAL_TABLE_FILE_CACHE = "enable_external_table_file_cache";
 
-    public static final String DISABLE_FILE_CACHE = "disable_file_cache";
+    public static final String LIMIT_INTERNAL_TABLE_FILE_CACHE_TO_DISPOSABLE = "limit_internal_table_file_cache_to_disposable";
 
     public static final String FILE_CACHE_BASE_PATH = "file_cache_base_path";
 
@@ -1975,18 +1975,17 @@ public class SessionVariable implements Serializable, Writable {
     @VariableMgr.VarAttr(name = GROUP_BY_AND_HAVING_USE_ALIAS_FIRST, varType = VariableAnnotation.DEPRECATED)
     public boolean groupByAndHavingUseAliasFirst = false;
 
-    // Whether disable block file cache. Block cache only works when FE's query options sets disableFileCache false
-    // along with BE's config `enable_file_cache` true
-    @VariableMgr.VarAttr(name = DISABLE_FILE_CACHE, needForward = true)
-    public boolean disableFileCache = false;
+    // Whether limit file cache to only disposable cache.
+    @VariableMgr.VarAttr(name = LIMIT_INTERNAL_TABLE_FILE_CACHE_TO_DISPOSABLE, needForward = true)
+    public boolean limitInternalTableFileCacheToDisposable = false;
 
     // Whether enable block file cache. Only take effect when BE config item enable_file_cache is true.
-    @VariableMgr.VarAttr(name = ENABLE_FILE_CACHE, needForward = true, description = {
-            "是否启用file cache。该变量只有在be.conf中enable_file_cache=true时才有效，"
+    @VariableMgr.VarAttr(name = ENABLE_EXTERNAL_TABLE_FILE_CACHE, needForward = true, description = {
+            "是否对外表启用file cache。该变量只有在be.conf中enable_file_cache=true时才有效，"
                     + "如果be.conf中enable_file_cache=false，该BE节点的file cache处于禁用状态。",
-            "Set wether to use file cache. This variable takes effect only if the BE config enable_file_cache=true. "
+            "Set wether to use file cache for external tables. This variable takes effect only if the BE config enable_file_cache=true. "
                     + "The cache is not used when BE config enable_file_cache=false."})
-    public boolean enableFileCache = false;
+    public boolean enableExternalTableFileCache = false;
 
     // Specify base path for file cache, or chose a random path.
     @VariableMgr.VarAttr(name = FILE_CACHE_BASE_PATH, needForward = true, description = {
@@ -3617,12 +3616,12 @@ public class SessionVariable implements Serializable, Writable {
         this.resourceGroup = resourceGroup;
     }
 
-    public boolean isDisableFileCache() {
-        return Config.isCloudMode() ? disableFileCache : false;
+    public boolean isLimitInternalTableFileCacheToDisposable() {
+        return Config.isCloudMode() ? limitInternalTableFileCacheToDisposable : false;
     }
 
-    public void setDisableFileCache(boolean disableFileCache) {
-        this.disableFileCache = disableFileCache;
+    public void setLimitInternalTableFileCacheToDisposable(boolean limitInternalTableFileCacheToDisposable) {
+        this.limitInternalTableFileCacheToDisposable = limitInternalTableFileCacheToDisposable;
     }
 
     public boolean isDisableColocatePlan() {
@@ -4427,12 +4426,12 @@ public class SessionVariable implements Serializable, Writable {
         return val ? 1 : 0;
     }
 
-    public boolean isEnableFileCache() {
-        return enableFileCache;
+    public boolean isEnableExternalTableFileCache() {
+        return enableExternalTableFileCache;
     }
 
-    public void setEnableFileCache(boolean enableFileCache) {
-        this.enableFileCache = enableFileCache;
+    public void setEnableExternalTableFileCache(boolean enableExternalTableFileCache) {
+        this.enableExternalTableFileCache = enableExternalTableFileCache;
     }
 
     public String getFileCacheBasePath() {
@@ -4612,7 +4611,7 @@ public class SessionVariable implements Serializable, Writable {
 
         tResult.setSkipDeleteBitmap(skipDeleteBitmap);
 
-        tResult.setEnableFileCache(enableFileCache);
+        tResult.setEnableExternalTableFileCache(enableExternalTableFileCache);
 
         tResult.setEnablePageCache(enablePageCache);
 
@@ -4651,7 +4650,7 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setParallelScanMinRowsPerScanner(parallelScanMinRowsPerScanner);
         tResult.setOptimizeIndexScanParallelism(optimizeIndexScanParallelism);
         tResult.setSkipBadTablet(skipBadTablet);
-        tResult.setDisableFileCache(disableFileCache);
+        tResult.setLimitInternalTableFileCacheToDisposable(limitInternalTableFileCacheToDisposable);
 
         tResult.setEnablePreferCachedRowset(getEnablePreferCachedRowset());
         tResult.setQueryFreshnessToleranceMs(getQueryFreshnessToleranceMs());

@@ -1762,7 +1762,7 @@ void FileScanner::update_realtime_counters() {
 
 void FileScanner::_collect_profile_before_close() {
     Scanner::_collect_profile_before_close();
-    if (config::enable_file_cache && _state->query_options().enable_file_cache &&
+    if (config::enable_file_cache && _state->query_options().enable_external_table_file_cache &&
         _profile != nullptr) {
         io::FileCacheProfileReporter cache_profile(_profile);
         cache_profile.update(_file_cache_statistics.get());

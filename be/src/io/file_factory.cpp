@@ -64,8 +64,8 @@ io::FileReaderOptions FileFactory::get_reader_options(RuntimeState* state,
             .mtime = fd.mtime,
     };
     if (config::enable_file_cache && state != nullptr &&
-        state->query_options().__isset.enable_file_cache &&
-        state->query_options().enable_file_cache) {
+        state->query_options().__isset.enable_external_table_file_cache &&
+        state->query_options().enable_external_table_file_cache) {
         opts.cache_type = io::FileCachePolicy::FILE_BLOCK_CACHE;
     }
     if (state != nullptr && state->query_options().__isset.file_cache_base_path &&

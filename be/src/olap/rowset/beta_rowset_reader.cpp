@@ -211,9 +211,9 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
     if (_read_context->runtime_state != nullptr) {
         _read_options.io_ctx.query_id = &_read_context->runtime_state->query_id();
         _read_options.io_ctx.read_file_cache =
-                _read_context->runtime_state->query_options().enable_file_cache;
+                _read_context->runtime_state->query_options().enable_external_table_file_cache;
         _read_options.io_ctx.is_disposable =
-                _read_context->runtime_state->query_options().disable_file_cache;
+                _read_context->runtime_state->query_options().limit_internal_table_file_cache_to_disposable;
     }
 
     _read_options.io_ctx.expiration_time =

@@ -222,7 +222,7 @@ public class StatisticsUtil {
         sessionVariable.parallelPipelineTaskNum = Config.statistics_sql_parallel_exec_instance_num;
         sessionVariable.setQueryTimeoutS(StatisticsUtil.getAnalyzeTimeout());
         sessionVariable.insertTimeoutS = StatisticsUtil.getAnalyzeTimeout();
-        sessionVariable.enableFileCache = false;
+        sessionVariable.enableExternalTableFileCache = false;
         sessionVariable.forbidUnknownColStats = false;
         sessionVariable.enablePushDownMinMaxOnUnique = true;
         sessionVariable.enablePushDownStringMinMax = true;
@@ -242,7 +242,7 @@ public class StatisticsUtil {
                 LOG.warn("failed to connect to cloud cluster", e);
                 return ctx;
             }
-            sessionVariable.disableFileCache = !useFileCacheForStat;
+            sessionVariable.limitInternalTableFileCacheToDisposable = !useFileCacheForStat;
             return ctx;
         } else {
             return new AutoCloseConnectContext(connectContext);
