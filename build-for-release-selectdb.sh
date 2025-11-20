@@ -113,9 +113,9 @@ if [[ "${VENDOR}" == "" ]]; then
 fi
 # these env vars are used by gensrc/script/gen_build_version.sh
 export DORIS_BUILD_VERSION_PREFIX=${VENDOR-selectdb}
-export DORIS_BUILD_VERSION_MAJOR=3
-export DORIS_BUILD_VERSION_MINOR=1
-export DORIS_BUILD_VERSION_PATCH=0
+export DORIS_BUILD_VERSION_MAJOR=4
+export DORIS_BUILD_VERSION_MINOR=0
+export DORIS_BUILD_VERSION_PATCH=2
 export DORIS_BUILD_VERSION_HOTFIX=0
 export DORIS_BUILD_VERSION_RC_VERSION="rc01"
 
