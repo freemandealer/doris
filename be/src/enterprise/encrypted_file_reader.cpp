@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "common/cast_set.h"
 #include "common/status.h"
 #include "encryption_common.h"
 
@@ -57,17 +58,19 @@ Status decrypt_ctr(const EncryptionInfo* info, size_t offset, Slice result) {
 
     auto mod = offset % ENCRYPT_BLOCK_SIZE;
     if (mod != 0) {
+        const int mod_int = cast_set<int>(mod);
         std::vector<unsigned char> dummy(mod);
         int out_len;
-        if (EVP_DecryptUpdate(ctx, dummy.data(), &out_len, dummy.data(), mod) != 1) {
+        if (EVP_DecryptUpdate(ctx, dummy.data(), &out_len, dummy.data(), mod_int) != 1) {
             return Status::InternalError("decrypt dummy part error");
         }
         DCHECK_LE(out_len, ENCRYPT_BLOCK_SIZE);
     }
 
     int out_len;
+    const int result_size = cast_set<int>(result.size);
     if (EVP_DecryptUpdate(ctx, reinterpret_cast<uint8_t*>(result.mutable_data()), &out_len,
-                          reinterpret_cast<uint8_t*>(result.data), result.size) != 1) {
+                          reinterpret_cast<uint8_t*>(result.data), result_size) != 1) {
         return Status::InternalError("decrypt error, offset={}", offset);
     }
 

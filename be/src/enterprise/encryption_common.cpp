@@ -27,7 +27,7 @@
 
 #include "common/status.h"
 #include "enterprise/key_cache.h"
-#include "gutil/endian.h"
+#include "vec/common/endian.h"
 
 namespace doris::io {
 

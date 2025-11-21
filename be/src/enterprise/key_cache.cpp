@@ -27,6 +27,7 @@
 #include <memory>
 #include <stop_token>
 
+#include "common/cast_set.h"
 #include "common/status.h"
 #include "gen_cpp/FrontendService.h"
 #include "runtime/client_cache.h"
@@ -186,13 +187,14 @@ std::shared_ptr<EncryptionKeyPB> KeyCache::generate_data_key(EncryptionAlgorithm
     std::string iv;
     iv.resize(iv_len);
 
-    if (!RAND_bytes(reinterpret_cast<unsigned char*>(mut_plain_text->data()),
-                    mut_plain_text->size())) {
+    const int plaintext_size = cast_set<int>(mut_plain_text->size());
+    if (!RAND_bytes(reinterpret_cast<unsigned char*>(mut_plain_text->data()), plaintext_size)) {
         LOG(WARNING) << "failed to generate random plaintext key";
         return nullptr;
     }
 
-    if (!RAND_bytes(reinterpret_cast<unsigned char*>(iv.data()), iv.size())) {
+    const int iv_size = cast_set<int>(iv.size());
+    if (!RAND_bytes(reinterpret_cast<unsigned char*>(iv.data()), iv_size)) {
         LOG(WARNING) << "failed to generate random iv";
         return nullptr;
     }
@@ -215,7 +217,7 @@ std::shared_ptr<EncryptionKeyPB> KeyCache::generate_data_key(EncryptionAlgorithm
     int outlen = 0;
     if (EVP_EncryptUpdate(ctx, reinterpret_cast<unsigned char*>(ciphertext.data()), &outlen,
                           reinterpret_cast<const unsigned char*>(data_key->plaintext().data()),
-                          data_key->plaintext().size()) != 1) {
+                          cast_set<int>(data_key->plaintext().size())) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return nullptr;
     }
@@ -300,7 +302,8 @@ Status KeyCache::decrypt_data_key(std::shared_ptr<EncryptionKeyPB>& data_key_cip
     int outlen = 0;
     if (EVP_DecryptUpdate(
                 ctx, reinterpret_cast<unsigned char*>(data_key_cipher->mutable_plaintext()->data()),
-                &outlen, reinterpret_cast<const unsigned char*>(ciphertext.data()), key_len) != 1) {
+                &outlen, reinterpret_cast<const unsigned char*>(ciphertext.data()),
+                cast_set<int>(key_len)) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         LOG(WARNING) << "failed to decryptUpdate, data key ciphertext len: " << key_len;
         return Status::InternalError("failed to decryptUpdate");

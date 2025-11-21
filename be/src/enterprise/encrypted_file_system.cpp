@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "common/cast_set.h"
 #include "common/status.h"
 #include "enterprise/encrypted_file_reader.h"
 #include "enterprise/encrypted_file_writer.h"
@@ -36,8 +37,6 @@
 namespace doris::io {
 
 // info_pb_len(uint32_t) + version(uint8_t) + magic_code(uint64_t)
-constexpr uint64_t footer_info_len = sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint64_t);
-
 Status EncryptedFileSystem::create_file_impl(const Path& file, FileWriterPtr* writer,
                                              const FileWriterOptions* opts) {
     auto maybe_encryption_info = io::EncryptionInfo::create(_algorithm);
@@ -86,7 +85,8 @@ Result<std::unique_ptr<EncryptionInfo>> parse_footer(std::span<uint8_t> footer) 
 
     auto info_pb_span = footer.subspan(sizeof(uint8_t) + sizeof(uint64_t), info_pb_size);
     FileEncryptionInfoPB info_pb;
-    if (!info_pb.ParseFromArray(info_pb_span.data(), info_pb_span.size())) {
+    const int info_pb_size_int = cast_set<int>(info_pb_span.size());
+    if (!info_pb.ParseFromArray(info_pb_span.data(), info_pb_size_int)) {
         return ResultError(Status::Corruption("parse encryption info failed"));
     }
 

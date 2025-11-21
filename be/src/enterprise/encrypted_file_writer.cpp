@@ -33,6 +33,7 @@
 #include <ranges>
 #include <span>
 
+#include "common/cast_set.h"
 #include "common/status.h"
 #include "enterprise/encryption_common.h"
 #include "util/coding.h"
@@ -68,9 +69,10 @@ Status encrypt_ctr(const std::shared_ptr<const EncryptionInfo>& info, size_t off
     EVP_CIPHER_CTX_set_padding(ctx, info->padding);
     auto mod = offset % ENCRYPT_BLOCK_SIZE;
     if (mod != 0) {
+        const int mod_int = cast_set<int>(mod);
         std::vector<unsigned char> dummy(mod);
         int out_len;
-        if (EVP_EncryptUpdate(ctx, dummy.data(), &out_len, dummy.data(), mod) != 1) {
+        if (EVP_EncryptUpdate(ctx, dummy.data(), &out_len, dummy.data(), mod_int) != 1) {
             return Status::InternalError("encrypt dummy part error");
         }
         DCHECK_LE(out_len, ENCRYPT_BLOCK_SIZE);
@@ -80,8 +82,9 @@ Status encrypt_ctr(const std::shared_ptr<const EncryptionInfo>& info, size_t off
     for (size_t i = 0; i < input.size(); ++i) {
         int out_len;
         auto in = input[i];
+        const int in_size = cast_set<int>(in.size);
         if (EVP_EncryptUpdate(ctx, reinterpret_cast<uint8_t*>(output[i].data), &out_len,
-                              reinterpret_cast<uint8_t*>(in.data), in.size) != 1) {
+                              reinterpret_cast<uint8_t*>(in.data), in_size) != 1) {
             return Status::InternalError("encrypt error, offset={}", offset + bytes_encrypted);
         }
         DCHECK_EQ(out_len, in.size);
@@ -97,7 +100,7 @@ Status EncryptedFileWriter::close(bool non_block) {
 
         std::string info_pb_buf = _encryption_info->serialize();
 
-        uint32_t info_pb_len = info_pb_buf.length();
+        uint32_t info_pb_len = cast_set<uint32_t>(info_pb_buf.length());
         uint8_t info_len_buf[sizeof(uint64_t)];
         encode_fixed64_le(info_len_buf, info_pb_len);
 
