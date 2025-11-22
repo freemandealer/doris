@@ -217,6 +217,7 @@ under the License.
     <modules>
         <module>fe-common</module>
         <module>fe-core</module>
+        <module>fe-enterprise</module>
         <module>hive-udf</module>
         <module>be-java-extensions</module>
     </modules>
