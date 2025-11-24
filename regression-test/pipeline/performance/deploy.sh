@@ -72,8 +72,8 @@ exit_flag=0
     sed -i "s|^storage_root_path=/data/doris-storage-\${branch_name}|storage_root_path=/data/doris-storage-${target_branch}${meta_changed_suffix:-}|g" "${DORIS_HOME}"/be/conf/be_custom.conf
 
     echo "#### 3. start Doris"
-    meta_dir=$(get_doris_conf_value "${DORIS_HOME}"/fe/conf/fe_custom.conf meta_dir)
-    storage_root_path=$(get_doris_conf_value "${DORIS_HOME}"/be/conf/be_custom.conf storage_root_path)
+    meta_dir=$(get_doris_conf_value "${DORIS_HOME}"/fe/conf meta_dir)
+    storage_root_path=$(get_doris_conf_value "${DORIS_HOME}"/be/conf storage_root_path)
     mkdir -p "${meta_dir}"
     mkdir -p "${storage_root_path}"
     if ! start_doris_fe; then echo "ERROR: Start doris fe failed." && exit 1; fi
@@ -82,9 +82,6 @@ exit_flag=0
 
     echo "#### 4. reset session variables"
     if ! reset_doris_session_variables; then exit 1; fi
-    session_variables_file="${teamcity_build_checkoutDir}/regression-test/pipeline/performance/conf/session_variables.sql"
-    echo -e "\n\ntuned session variables:\n$(cat "${session_variables_file}")\n\n"
-    set_doris_session_variables_from_file "${session_variables_file}"
 )
 exit_flag="$?"
 
