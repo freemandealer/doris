@@ -18,6 +18,7 @@
 package org.apache.doris.transaction;
 
 import org.apache.doris.alter.AlterJobV2;
+import org.apache.doris.binlog.UpsertRecord;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
@@ -55,6 +56,7 @@ import org.apache.doris.mtmv.MTMVUtil;
 import org.apache.doris.persist.BatchRemoveTransactionsOperationV2;
 import org.apache.doris.persist.CleanLabelOperationLog;
 import org.apache.doris.persist.EditLog;
+import org.apache.doris.persist.OperationType;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.statistics.AnalysisManager;
 import org.apache.doris.task.AgentBatchTask;
@@ -332,6 +334,7 @@ public class DatabaseTransactionMgr {
 
         long tid = 0L;
         TransactionState transactionState = null;
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             /*
@@ -373,6 +376,11 @@ public class DatabaseTransactionMgr {
                     tid, label, requestId, sourceType, coordinator, listenerId, timeoutSecond * 1000);
             transactionState.setPrepareTime(System.currentTimeMillis());
             unprotectUpdateInMemoryState(transactionState, false);
+            if (Config.enable_txn_log_outside_lock) {
+                logItem = enqueueTransactionState(transactionState);
+            } else {
+                persistTransactionState(transactionState);
+            }
 
             if (MetricRepo.isInit) {
                 MetricRepo.COUNTER_TXN_BEGIN.increase(1L);
@@ -380,8 +388,7 @@ public class DatabaseTransactionMgr {
         } finally {
             writeUnlock();
         }
-        // Persist edit log outside lock to reduce lock contention
-        persistTransactionState(transactionState);
+        awaitTransactionState(logItem, transactionState);
         LOG.info("begin transaction: txn id {} with label {} from coordinator {}, listener id: {}",
                     tid, label, coordinator, listenerId);
         return tid;
@@ -451,15 +458,20 @@ public class DatabaseTransactionMgr {
         checkCommitStatus(tableList, transactionState, tabletCommitInfos, txnCommitAttachment, errorReplicaIds,
                           tableToPartition, totalInvolvedBackends);
 
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             unprotectedPreCommitTransaction2PC(transactionState, errorReplicaIds, tableToPartition,
                     totalInvolvedBackends, db);
+            if (Config.enable_txn_log_outside_lock) {
+                logItem = enqueueTransactionState(transactionState);
+            } else {
+                persistTransactionState(transactionState);
+            }
         } finally {
             writeUnlock();
         }
-        // Persist edit log outside lock to reduce lock contention
-        persistTransactionState(transactionState);
+        awaitTransactionState(logItem, transactionState);
         LOG.info("transaction:[{}] successfully pre-committed", transactionState);
     }
 
@@ -807,6 +819,7 @@ public class DatabaseTransactionMgr {
         transactionState.beforeStateTransform(TransactionStatus.COMMITTED);
         // transaction state transform
         boolean txnOperated = false;
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             if (is2PC) {
@@ -814,6 +827,11 @@ public class DatabaseTransactionMgr {
             } else {
                 unprotectedCommitTransaction(transactionState, errorReplicaIds,
                         tableToPartition, totalInvolvedBackends, db);
+            }
+            if (Config.enable_txn_log_outside_lock) {
+                logItem = enqueueTransactionState(transactionState);
+            } else {
+                persistTransactionState(transactionState);
             }
             txnOperated = true;
         } finally {
@@ -825,9 +843,8 @@ public class DatabaseTransactionMgr {
                 LOG.warn("afterStateTransform txn {} failed. exception: ", transactionState, e);
             }
         }
-        // Persist edit log outside lock to reduce lock contention
         if (txnOperated) {
-            persistTransactionState(transactionState);
+            awaitTransactionState(logItem, transactionState);
         }
 
         // update nextVersion because of the failure of persistent transaction resulting in error version
@@ -878,10 +895,16 @@ public class DatabaseTransactionMgr {
         transactionState.beforeStateTransform(TransactionStatus.COMMITTED);
         // transaction state transform
         boolean txnOperated = false;
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             unprotectedCommitTransaction(transactionState, errorReplicaIds, subTxnToPartition, totalInvolvedBackends,
                     subTransactionStates, db);
+            if (Config.enable_txn_log_outside_lock) {
+                logItem = enqueueTransactionState(transactionState);
+            } else {
+                persistTransactionState(transactionState);
+            }
             txnOperated = true;
         } finally {
             writeUnlock();
@@ -892,9 +915,8 @@ public class DatabaseTransactionMgr {
                 LOG.warn("afterStateTransform txn {} failed. exception: ", transactionState, e);
             }
         }
-        // Persist edit log outside lock to reduce lock contention
         if (txnOperated) {
-            persistTransactionState(transactionState);
+            awaitTransactionState(logItem, transactionState);
         }
 
         // update nextVersion because of the failure of persistent transaction resulting in error version
@@ -1182,6 +1204,7 @@ public class DatabaseTransactionMgr {
                 }
             }
             boolean txnOperated = false;
+            EditLog.EditLogItem logItem = null;
             writeLock();
             try {
                 transactionState.setErrorReplicas(errorReplicaIds);
@@ -1190,6 +1213,11 @@ public class DatabaseTransactionMgr {
                 transactionState.setTransactionStatus(TransactionStatus.VISIBLE);
                 setTableVersion(transactionState, db);
                 unprotectUpdateInMemoryState(transactionState, false);
+                if (Config.enable_txn_log_outside_lock) {
+                    logItem = enqueueTransactionState(transactionState);
+                } else {
+                    persistTransactionState(transactionState);
+                }
                 txnOperated = true;
                 // TODO(cmy): We found a very strange problem. When delete-related transactions are processed here,
                 // subsequent `updateCatalogAfterVisible()` is called, but it does not seem to be executed here
@@ -1206,10 +1234,10 @@ public class DatabaseTransactionMgr {
                     LOG.warn("afterStateTransform txn {} failed. exception: ", transactionState, e);
                 }
             }
-            // Persist edit log outside transaction lock to reduce lock contention
+            // Await edit log outside transaction lock to reduce lock contention
             // (still inside table locks for atomicity)
             if (txnOperated) {
-                persistTransactionState(transactionState);
+                awaitTransactionState(logItem, transactionState);
             }
             updateCatalogAfterVisible(transactionState, db, partitionVisibleVersions, backendPartitions);
         } finally {
@@ -1782,6 +1810,46 @@ public class DatabaseTransactionMgr {
         }
     }
 
+    /**
+     * Enqueue a transaction state edit log entry without waiting for persistence.
+     * Must be called inside the write lock to preserve ordering via the FIFO queue.
+     *
+     * @return an {@link EditLog.EditLogItem} handle to await completion, or null if persistence is skipped
+     */
+    protected EditLog.EditLogItem enqueueTransactionState(TransactionState transactionState) {
+        if (transactionState.getTransactionStatus() != TransactionStatus.PREPARE
+                || transactionState.getSourceType() == TransactionState.LoadJobSourceType.FRONTEND) {
+            return editLog.submitEdit(OperationType.OP_UPSERT_TRANSACTION_STATE, transactionState);
+        }
+        return null;
+    }
+
+    /**
+     * Await completion of a previously enqueued transaction state edit log entry.
+     * Should be called outside the write lock. Handles binlog and timing logic.
+     *
+     * @param item the handle returned by {@link #enqueueTransactionState}, may be null
+     * @param transactionState the transaction state (for binlog and timing)
+     */
+    protected void awaitTransactionState(EditLog.EditLogItem item, TransactionState transactionState) {
+        if (item == null) {
+            return;
+        }
+        long start = System.currentTimeMillis();
+        long logId = item.await();
+        long logEditEnd = System.currentTimeMillis();
+        long end = logEditEnd;
+        if (transactionState.getTransactionStatus() == TransactionStatus.VISIBLE) {
+            UpsertRecord record = new UpsertRecord(logId, transactionState);
+            Env.getCurrentEnv().getBinlogManager().addUpsertRecord(record);
+            end = System.currentTimeMillis();
+        }
+        if (end - start > Config.lock_reporting_threshold_ms) {
+            LOG.warn("edit log insert transaction take a lot time, write bdb {} ms, write binlog {} ms",
+                    logEditEnd - start, end - logEditEnd);
+        }
+    }
+
     public int getRunningTxnNumsWithLock() {
         readLock();
         try {
@@ -1830,16 +1898,23 @@ public class DatabaseTransactionMgr {
         // before state transform
         transactionState.beforeStateTransform(TransactionStatus.ABORTED);
         boolean txnOperated = false;
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             txnOperated = unprotectAbortTransaction(transactionId, reason);
+            if (txnOperated) {
+                if (Config.enable_txn_log_outside_lock) {
+                    logItem = enqueueTransactionState(transactionState);
+                } else {
+                    persistTransactionState(transactionState);
+                }
+            }
         } finally {
             writeUnlock();
             transactionState.afterStateTransform(TransactionStatus.ABORTED, txnOperated, reason);
         }
-        // Persist edit log outside lock to reduce lock contention
         if (txnOperated) {
-            persistTransactionState(transactionState);
+            awaitTransactionState(logItem, transactionState);
         }
 
         // send clear txn task to BE to clear the transactions on BE.
@@ -1876,16 +1951,23 @@ public class DatabaseTransactionMgr {
         // before state transform
         transactionState.beforeStateTransform(TransactionStatus.ABORTED);
         boolean txnOperated = false;
+        EditLog.EditLogItem logItem = null;
         writeLock();
         try {
             txnOperated = unprotectAbortTransaction(transactionId, "User Abort");
+            if (txnOperated) {
+                if (Config.enable_txn_log_outside_lock) {
+                    logItem = enqueueTransactionState(transactionState);
+                } else {
+                    persistTransactionState(transactionState);
+                }
+            }
         } finally {
             writeUnlock();
             transactionState.afterStateTransform(TransactionStatus.ABORTED, txnOperated, "User Abort");
         }
-        // Persist edit log outside lock to reduce lock contention
         if (txnOperated) {
-            persistTransactionState(transactionState);
+            awaitTransactionState(logItem, transactionState);
         }
 
         // send clear txn task to BE to clear the transactions on BE.
@@ -2023,6 +2105,7 @@ public class DatabaseTransactionMgr {
     public void removeUselessTxns(long currentMillis) {
         // delete expired txns
         BatchRemoveTransactionsOperationV2 op = null;
+        EditLog.EditLogItem logItem = null;
         int numOfClearedTransaction = 0;
         writeLock();
         try {
@@ -2035,16 +2118,20 @@ public class DatabaseTransactionMgr {
             if (numOfClearedTransaction > 0) {
                 op = new BatchRemoveTransactionsOperationV2(dbId,
                         expiredTxnsInfoForShort.first, expiredTxnsInfoForLong.first);
+                if (Config.enable_txn_log_outside_lock) {
+                    logItem = editLog.submitEdit(OperationType.OP_BATCH_REMOVE_TXNS_V2, op);
+                } else {
+                    editLog.logBatchRemoveTransactions(op);
+                }
             }
         } finally {
             writeUnlock();
         }
-        // Persist edit log outside lock to reduce lock contention
-        if (op != null) {
-            editLog.logBatchRemoveTransactions(op);
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Remove {} expired transactions", numOfClearedTransaction);
-            }
+        if (logItem != null) {
+            logItem.await();
+        }
+        if (op != null && LOG.isDebugEnabled()) {
+            LOG.debug("Remove {} expired transactions", numOfClearedTransaction);
         }
     }
 
