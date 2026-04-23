@@ -78,6 +78,9 @@
 #include "format/orc/vorc_reader.h"
 #include "format/parquet/vparquet_reader.h"
 #include "format/text/text_reader.h"
+#ifdef BUILD_RUST_READERS
+#include "format/lance/lance_rust_reader.h"
+#endif
 #include "io/fs/local_file_system.h"
 #include "io/fs/stream_load_pipe.h"
 #include "io/io_common.h"
@@ -866,6 +869,12 @@ void PInternalService::fetch_table_schema(google::protobuf::RpcController* contr
                                                   io_ctx.get(), io_ctx);
             break;
         }
+#ifdef BUILD_RUST_READERS
+        case TFileFormatType::FORMAT_LANCE: {
+            reader = LanceRustReader::create_unique(params, range, io_ctx.get());
+            break;
+        }
+#endif
         default:
             st = Status::InternalError("Not supported file format in fetch table schema: {}",
                                        params.format_type);
@@ -1699,10 +1708,15 @@ void PInternalService::rerun_fragment(google::protobuf::RpcController* controlle
                                       PRerunFragmentResult* response,
                                       google::protobuf::Closure* done) {
     bool ret = _light_work_pool.try_offer([this, request, response, done]() {
-        brpc::ClosureGuard closure_guard(done);
-        auto st =
-                _exec_env->fragment_mgr()->rerun_fragment(UniqueId(request->query_id()).to_thrift(),
-                                                          request->fragment_id(), request->stage());
+        // Use shared_ptr<ClosureGuard> so we can transfer ownership to the PFC.
+        // For wait_for_destroy/final_close, the guard is stored in the PFC and the RPC
+        // response is deferred until the PFC is fully destroyed. For rebuild/submit,
+        // the guard fires immediately when this lambda returns.
+        std::shared_ptr<brpc::ClosureGuard> closure_guard =
+                std::make_shared<brpc::ClosureGuard>(done);
+        auto st = _exec_env->fragment_mgr()->rerun_fragment(
+                closure_guard, UniqueId(request->query_id()).to_thrift(), request->fragment_id(),
+                request->stage());
         st.to_protobuf(response->mutable_status());
     });
     if (!ret) {

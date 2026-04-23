@@ -35,7 +35,6 @@
 #include "util/pretty_printer.h"
 
 namespace doris {
-#include "common/compile_check_begin.h"
 
 Status PartitionedHashJoinSinkLocalState::init(doris::RuntimeState* state,
                                                doris::LocalSinkStateInfo& info) {
@@ -478,6 +477,10 @@ Status PartitionedHashJoinSinkLocalState::_setup_internal_operator(RuntimeState*
     /// Set these two values after all the work is ready.
     _shared_state->_inner_shared_state = std::move(inner_shared_state);
     _shared_state->_inner_runtime_state = std::move(inner_runtime_state);
+    // The inner (spill) runtime state registers its own runtime filters. Merge those IDs
+    // into the parent state so they are tracked for deregistration during recursive CTE rerun.
+    state->merge_register_runtime_filter(
+            _shared_state->_inner_runtime_state->get_deregister_runtime_filter());
     return Status::OK();
 }
 
@@ -572,5 +575,4 @@ bool PartitionedHashJoinSinkLocalState::is_blockable() const {
     return _shared_state->_is_spilled;
 }
 
-#include "common/compile_check_end.h"
 } // namespace doris

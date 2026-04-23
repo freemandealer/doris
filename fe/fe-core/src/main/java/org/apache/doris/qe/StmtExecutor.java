@@ -65,7 +65,10 @@ import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.FileScanNode;
 import org.apache.doris.datasource.tvf.source.TVFScanNode;
+import org.apache.doris.filesystem.FileSystemUtil;
+import org.apache.doris.filesystem.Location;
 import org.apache.doris.foundation.format.FormatOptions;
+import org.apache.doris.fs.FileSystemFactory;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mysql.FieldInfo;
 import org.apache.doris.mysql.MysqlChannel;
@@ -109,8 +112,10 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalSqlCache;
 import org.apache.doris.planner.GroupCommitScanNode;
 import org.apache.doris.planner.OlapScanNode;
+import org.apache.doris.planner.PlanFragment;
 import org.apache.doris.planner.PlanNode;
 import org.apache.doris.planner.Planner;
+import org.apache.doris.planner.ResultFileSink;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.proto.Data;
 import org.apache.doris.proto.InternalService;
@@ -429,10 +434,6 @@ public class StmtExecutor {
             isForwardedToMaster = shouldForwardToMaster();
         }
         return isForwardedToMaster;
-    }
-
-    public boolean isMoreStmtExists() {
-        return moreStmtExists;
     }
 
     public void setMoreStmtExists(boolean moreStmtExists) {
@@ -845,7 +846,7 @@ public class StmtExecutor {
                     MetricRepo.HISTO_PLAN_OPTIMIZE_DURATION.update(nereidsOptimizeTimeMs);
                 }
                 int nereidsTranslateTimeMs = summaryProfile.getNereidsTranslateTimeMs();
-                if (nereidsOptimizeTimeMs >= 0) {
+                if (nereidsTranslateTimeMs >= 0) {
                     MetricRepo.HISTO_PLAN_TRANSLATE_DURATION.update(nereidsTranslateTimeMs);
                 }
                 long initScanNodeTimeMs = summaryProfile.getInitScanNodeTimeMs();
@@ -1057,12 +1058,6 @@ public class StmtExecutor {
             return;
         }
         new MasterOpExecutor(context).syncJournal();
-    }
-
-    /**
-     * get variables in stmt.
-     */
-    private void analyzeVariablesInStmt() throws DdlException {
     }
 
     private boolean isQuery() {
@@ -1369,8 +1364,16 @@ public class StmtExecutor {
         }
 
         coordBase.setIsProfileSafeStmt(this.isProfileSafeStmt());
+        OutFileClause outFileClause = null;
+        if (isOutfileQuery) {
+            outFileClause = queryStmt.getOutFileClause();
+            Preconditions.checkState(outFileClause != null, "OUTFILE query must have OutFileClause");
+        }
 
         try {
+            if (outFileClause != null) {
+                deleteExistingOutfileFilesInFe(outFileClause);
+            }
             coordBase.exec();
             profile.getSummaryProfile().setQueryScheduleFinishTime(TimeUtils.getStartTimeMs());
             updateProfile(false);
@@ -1404,8 +1407,8 @@ public class StmtExecutor {
                             sendFields(queryStmt.getColLabels(), queryStmt.getFieldInfos(),
                                     getReturnTypes(queryStmt));
                         } else {
-                            if (!Strings.isNullOrEmpty(queryStmt.getOutFileClause().getSuccessFileName())) {
-                                outfileWriteSuccess(queryStmt.getOutFileClause());
+                            if (!Strings.isNullOrEmpty(outFileClause.getSuccessFileName())) {
+                                outfileWriteSuccess(outFileClause);
                             }
                             sendFields(OutFileClause.RESULT_COL_NAMES, OutFileClause.RESULT_COL_TYPES);
                         }
@@ -1545,6 +1548,36 @@ public class StmtExecutor {
             }
             throw new AnalysisException(errMsg);
         }
+    }
+
+    private void deleteExistingOutfileFilesInFe(OutFileClause outFileClause) throws UserException {
+        // Handle directory cleanup once in FE so parallel outfile writers never race on deletion.
+        if (!outFileClause.shouldDeleteExistingFiles()) {
+            return;
+        }
+        Preconditions.checkState(outFileClause.getBrokerDesc() != null,
+                "delete_existing_files requires a remote outfile sink");
+        Preconditions.checkState(outFileClause.getBrokerDesc().storageType() != StorageType.LOCAL,
+                "delete_existing_files is not supported for local outfile sinks");
+        try (org.apache.doris.filesystem.FileSystem fs =
+                FileSystemFactory.getFileSystem(outFileClause.getBrokerDesc())) {
+            fs.delete(Location.of(FileSystemUtil.extractParentDirectory(outFileClause.getFilePath())), true);
+        } catch (java.io.IOException e) {
+            throw new UserException("Failed to delete existing files: " + e.getMessage(), e);
+        }
+        clearDeleteExistingFilesInPlan();
+    }
+
+    private void clearDeleteExistingFilesInPlan() {
+        ResultFileSink resultFileSink = null;
+        for (PlanFragment fragment : planner.getFragments()) {
+            if (fragment.getSink() instanceof ResultFileSink) {
+                Preconditions.checkState(resultFileSink == null, "OUTFILE query should have only one ResultFileSink");
+                resultFileSink = (ResultFileSink) fragment.getSink();
+            }
+        }
+        Preconditions.checkState(resultFileSink != null, "OUTFILE query must have ResultFileSink");
+        resultFileSink.setDeleteExistingFiles(false);
     }
 
     public static void syncLoadForTablets(List<List<Backend>> backendsList, List<Long> allTabletIds) {

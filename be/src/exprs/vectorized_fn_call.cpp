@@ -71,7 +71,6 @@ class TExprNode;
 } // namespace doris
 
 namespace doris {
-#include "common/compile_check_begin.h"
 
 const std::string AGG_STATE_SUFFIX = "_state";
 
@@ -209,9 +208,9 @@ Status VectorizedFnCall::evaluate_inverted_index(VExprContext* context, uint32_t
     return _evaluate_inverted_index(context, _function, segment_num_rows);
 }
 
-Status VectorizedFnCall::_do_execute(VExprContext* context, const Block* block, Selector* selector,
-                                     size_t count, ColumnPtr& result_column,
-                                     ColumnPtr* arg_column) const {
+Status VectorizedFnCall::_do_execute(VExprContext* context, const Block* block,
+                                     const Selector* selector, size_t count,
+                                     ColumnPtr& result_column, ColumnPtr* arg_column) const {
     if (is_const_and_have_executed()) { // const have executed in open function
         result_column = get_result_from_const(count);
         return Status::OK();
@@ -301,9 +300,9 @@ Status VectorizedFnCall::execute_runtime_filter(VExprContext* context, const Blo
     return _do_execute(context, block, nullptr, count, result_column, arg_column);
 }
 
-Status VectorizedFnCall::execute_column(VExprContext* context, const Block* block,
-                                        Selector* selector, size_t count,
-                                        ColumnPtr& result_column) const {
+Status VectorizedFnCall::execute_column_impl(VExprContext* context, const Block* block,
+                                             const Selector* selector, size_t count,
+                                             ColumnPtr& result_column) const {
     return _do_execute(context, block, selector, count, result_column, nullptr);
 }
 
@@ -610,13 +609,27 @@ Status VectorizedFnCall::evaluate_ann_range_search(
                 range_search_runtime.dim, index_dim);
     }
 
+    auto stats = std::make_unique<segment_v2::AnnIndexStats>();
+    // Track load index timing
+    {
+        SCOPED_TIMER(&(stats->load_index_costs_ns));
+        if (!ann_index_iterator->try_load_index()) {
+            VLOG_DEBUG << "ANN range search skipped: "
+                       << fmt::format("Failed to load ANN index for column cid {}", src_col_cid);
+            ann_index_stats.fall_back_brute_force_cnt += 1;
+            return Status::OK();
+        }
+        double load_costs_ms = static_cast<double>(stats->load_index_costs_ns.value()) / 1000000.0;
+        DorisMetrics::instance()->ann_index_load_costs_ms->increment(
+                static_cast<int64_t>(load_costs_ms));
+    }
+
     AnnRangeSearchParams params = range_search_runtime.to_range_search_params();
 
     params.roaring = &row_bitmap;
     DCHECK(params.roaring != nullptr);
     DCHECK(params.query_value != nullptr);
     segment_v2::AnnRangeSearchResult result;
-    auto stats = std::make_unique<segment_v2::AnnIndexStats>();
     RETURN_IF_ERROR(ann_index_iterator->range_search(params, range_search_runtime.user_params,
                                                      &result, stats.get()));
 
@@ -699,5 +712,4 @@ double VectorizedFnCall::execute_cost() const {
     return cost;
 }
 
-#include "common/compile_check_end.h"
 } // namespace doris

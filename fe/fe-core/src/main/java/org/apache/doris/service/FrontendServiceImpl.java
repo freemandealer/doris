@@ -43,6 +43,7 @@ import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.catalog.View;
 import org.apache.doris.catalog.info.PartitionNamesInfo;
+import org.apache.doris.catalog.info.TableNameInfo;
 import org.apache.doris.cloud.CloudWarmUpJob;
 import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.catalog.CloudPartition;
@@ -83,7 +84,6 @@ import org.apache.doris.datasource.ExternalDatabase;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.datasource.SplitSource;
 import org.apache.doris.encryption.EncryptionKey;
-import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.info.TableRefInfo;
 import org.apache.doris.insertoverwrite.InsertOverwriteManager;
 import org.apache.doris.insertoverwrite.InsertOverwriteUtil;
@@ -1455,6 +1455,9 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         TLoadTxnCommitResult result = new TLoadTxnCommitResult();
         TStatus status = checkMaster();
         result.setStatus(status);
+        if (status.getStatusCode() != TStatusCode.OK) {
+            return result;
+        }
 
         try {
             loadTxnPreCommitImpl(request);
@@ -3916,13 +3919,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         if (request.isSetTableRefs()) {
             for (TTableRef tTableRef : request.getTableRefs()) {
                 tableRefs.add(new TableRefInfo(new TableNameInfo(tTableRef.getTable()),
-                        null,
-                        null,
-                        null,
-                        new ArrayList<>(),
-                        tTableRef.getAliasName(),
-                        null,
-                        new ArrayList<>()));
+                        tTableRef.getAliasName()));
             }
         }
 
@@ -4391,15 +4388,21 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         // check partition's number limit. because partitions in addPartitionClauseMap may be duplicated with existing
         // partitions, which would lead to false positive. so we should check the partition number AFTER adding new
         // partitions using its ACTUAL NUMBER, rather than the sum of existing and requested partitions.
-        if (olapTable.getPartitionNum() > Config.max_auto_partition_num) {
+        int partitionNum = olapTable.getPartitionNum();
+        int autoPartitionLimit = Config.max_auto_partition_num;
+        if (partitionNum > autoPartitionLimit) {
             String errorMessage = String.format(
                     "partition numbers %d exceeded limit of variable max_auto_partition_num %d",
-                    olapTable.getPartitionNum(), Config.max_auto_partition_num);
+                    partitionNum, autoPartitionLimit);
             LOG.warn(errorMessage);
             errorStatus.setErrorMsgs(Lists.newArrayList(errorMessage));
             result.setStatus(errorStatus);
             LOG.warn("send create partition error status: {}", result);
             return result;
+        } else if (partitionNum > autoPartitionLimit * 8 / 10) {
+            LOG.warn("Table {}.{} auto partition count {} is approaching limit {} (>80%)."
+                        + " Consider increasing max_auto_partition_num.",
+                    db.getFullName(), olapTable.getName(), partitionNum, autoPartitionLimit);
         }
 
         // build partition & tablets

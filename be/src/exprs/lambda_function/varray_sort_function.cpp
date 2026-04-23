@@ -33,7 +33,6 @@
 #include "exprs/vexpr.h"
 
 namespace doris {
-#include "common/compile_check_begin.h"
 
 class VExprContext;
 
@@ -45,7 +44,7 @@ using ConstColumnVariant =
                      const ColumnDecimal32*, const ColumnDecimal64*, const ColumnDecimal128V2*,
                      const ColumnDecimal128V3*, const ColumnDecimal256*, const ColumnDate*,
                      const ColumnDateTime*, const ColumnDateV2*, const ColumnDateTimeV2*,
-                     const ColumnTime*, const ColumnTimeV2*>;
+                     const ColumnTimeV2*>;
 
 template <typename T>
 struct is_column_vector : std::false_type {};
@@ -67,8 +66,8 @@ public:
 
     std::string get_name() const override { return name; }
 
-    Status execute(VExprContext* context, const Block* block, Selector* expr_selector, size_t count,
-                   ColumnPtr& result_column, const DataTypePtr& result_type,
+    Status execute(VExprContext* context, const Block* block, const Selector* expr_selector,
+                   size_t count, ColumnPtr& result_column, const DataTypePtr& result_type,
                    const VExprSPtrs& children) const override {
         ///* array_sort(lambda, arg) *///
 
@@ -256,7 +255,6 @@ public:
             DISPATCH_PRIMITIVE_TYPE(TYPE_DATETIME, ColumnDateTime)
             DISPATCH_PRIMITIVE_TYPE(TYPE_DATEV2, ColumnDateV2)
             DISPATCH_PRIMITIVE_TYPE(TYPE_DATETIMEV2, ColumnDateTimeV2)
-            DISPATCH_PRIMITIVE_TYPE(TYPE_TIME, ColumnTime)
             DISPATCH_PRIMITIVE_TYPE(TYPE_TIMEV2, ColumnTimeV2)
         default:
             return Status::InternalError("Unsupported type in array_sort");
@@ -271,5 +269,4 @@ void register_function_array_sort(doris::LambdaFunctionFactory& factory) {
     factory.register_function<ArraySortFunction>();
 }
 
-#include "common/compile_check_end.h"
 } // namespace doris

@@ -397,6 +397,15 @@ public class Config extends ConfigBase {
     @ConfField(description = {"The connection timeout of thrift client, in milliseconds. 0 means no timeout."})
     public static int thrift_client_timeout_ms = 0;
 
+    @ConfField(mutable = true, masterOnly = false,
+            description = {"Thrift RPC 连接阶段的超时时间（毫秒），包括 TCP connect 和可能的 TLS 握手。"
+                    + "用于防止 reopen() 时因网络异常长时间阻塞。0 表示不设置。",
+                    "Timeout in milliseconds for the connect phase of Thrift RPC connections, "
+                    + "including TCP connect and potential TLS handshake. "
+                    + "Prevents long blocking during reopen() when network is unreachable. "
+                    + "0 means no timeout."})
+    public static int thrift_rpc_connect_timeout_ms = 10000;
+
     // The default value is inherited from org.apache.thrift.TConfiguration
     @ConfField(description = {"The maximum size of a received message of the Thrift server, in bytes"})
     public static int thrift_max_message_size = 100 * 1024 * 1024;
@@ -541,6 +550,14 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = true, description = {
             "Randomly use V3 storage_format (ext_meta) for some tables in fuzzy tests to increase coverage"})
     public static boolean random_use_v3_storage_format = true;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "The stale threshold of checkpoint image file in cloud mode (in seconds). "
+                    + "If the image file is older than this threshold, a new checkpoint will be triggered "
+                    + "even if there are no new journals. This helps keep table version, partition version, "
+                    + "and tablet stats in the image up-to-date. If the value is less than or equal to 0, "
+                    + "this feature is disabled."})
+    public static long cloud_checkpoint_image_stale_threshold_seconds = 3600;
 
     @ConfField(mutable = true, masterOnly = true, description = {
             "Wait for the internal batch to be written before returning; "
@@ -1521,7 +1538,7 @@ public class Config extends ConfigBase {
      * The number is determined by "start" and "end" in the dynamic partition parameters.
      */
     @ConfField(mutable = true, masterOnly = true)
-    public static int max_dynamic_partition_num = 500;
+    public static int max_dynamic_partition_num = 20000;
 
     /**
      * Used to limit the maximum number of partitions that can be created when creating multi partition,
@@ -2503,6 +2520,23 @@ public class Config extends ConfigBase {
     @ConfField
     public static int auto_analyze_simultaneously_running_task_num = 1;
 
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "统计信息收集时 string 列允许的最大字节长度。若列中存在长度超过该值的行，"
+                    + "该列的统计信息将被跳过收集（task 仍标记为 FINISHED，在 SHOW ANALYZE 中显示跳过原因）。"
+                    + "≤ 0 表示关闭此保护。默认 1024 (1KB)。"
+                    + "注意：此保护只覆盖 FULL / LINEAR / DUJ1 统计收集路径（即 analyze 全表和 sample 的主 SQL）。"
+                    + "当 enable_partition_analyze=true 时的 per-partition 路径（PARTITION_ANALYZE_TEMPLATE）"
+                    + "出于正确性考虑不启用该保护，详见 BaseAnalysisTask 中的 NOTE。",
+            "Max byte length allowed for a string column when collecting statistics. "
+                    + "If any row in a string column is longer than this value, the column's stats "
+                    + "collection is skipped (the task is still marked FINISHED, with the skip reason "
+                    + "shown in SHOW ANALYZE). A value <= 0 disables this protection. Default: 1024 (1KB). "
+                    + "Note: this protection applies to the FULL / LINEAR / DUJ1 collection paths "
+                    + "(i.e. the main SQL used by full-table and sample analyze). The per-partition path "
+                    + "(PARTITION_ANALYZE_TEMPLATE, used when enable_partition_analyze=true) is intentionally "
+                    + "not guarded for correctness reasons; see the NOTE in BaseAnalysisTask."})
+    public static long statistics_max_string_column_length = 1024;
+
     @Deprecated
     @ConfField
     public static final int period_analyze_simultaneously_running_task_num = 1;
@@ -2569,6 +2603,17 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, masterOnly = true, description = {"Maximum number of buckets for auto bucketing."})
     public static int autobucket_max_buckets = 128;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Maximum number of buckets allowed when creating a table or adding a partition. "
+                    + "This config shares the same default value with autobucket_max_buckets for consistency. "
+                    + "Behavior: "
+                    + "1. For user-specified buckets (CREATE TABLE / ALTER TABLE ADD PARTITION): "
+                    + "if bucket number exceeds this limit, the operation will be rejected with an error message. "
+                    + "2. For auto-bucket feature (Dynamic Partition): "
+                    + "bucket number will be capped at autobucket_max_buckets automatically. "
+                    + "Set to 0 or negative value to disable this limit for user-specified buckets."})
+    public static int max_bucket_num_per_partition = 768;
 
     @ConfField(description = {"Maximum number of connections for the Arrow Flight Server per FE."})
     public static int arrow_flight_max_connections = 4096;
@@ -2690,8 +2735,8 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, masterOnly = true, description = {
             "For auto-partitioned tables to prevent users from accidentally creating a large number of partitions, "
-                    + "the number of partitions allowed per OLAP table is `max_auto_partition_num`. Default 2000."})
-    public static int max_auto_partition_num = 2000;
+                    + "the number of partitions allowed per OLAP table is `max_auto_partition_num`. Default 20000."})
+    public static int max_auto_partition_num = 20000;
 
     @ConfField(mutable = true, masterOnly = true, description = {
             "The maximum difference in the number of tablets of each BE in partition rebalance mode. "
@@ -2772,9 +2817,16 @@ public class Config extends ConfigBase {
     @ConfField
     public static boolean ignore_bdbje_log_checksum_read = false;
 
-    @ConfField(description = {"Specifies the authentication type"},
-            options = {"default", "ldap"})
+    @ConfField(description = {
+            "Specifies the primary MySQL authenticator name, either a built-in authenticator "
+                    + "or an authentication plugin name"},
+            options = {"default", "password", "ldap", "<plugin_name>"})
     public static String authentication_type = "default";
+
+    @ConfField(mutable = true, description = {
+            "Specifies the authentication chain used after primary authentication failure, "
+                    + "multiple integration names are comma-separated"})
+    public static String authentication_chain = "";
 
     @ConfField(mutable = true, masterOnly = false, description = {
             "Specify the default plugins loading path for the trino-connector catalog"})
@@ -2904,6 +2956,11 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = true, description = {
             "Interval at which the dictionary triggers a data expiration check, in seconds."})
     public static int dictionary_auto_refresh_interval_seconds = 5;
+
+    @ConfField(mutable = false, masterOnly = false, description = {
+            "Whether to enable the experimental Table Stream functionality" },
+            varType = VariableAnnotation.EXPERIMENTAL)
+    public static boolean enable_table_stream = false;
 
     //==========================================================================
     //                    begin of cloud config
@@ -3261,8 +3318,8 @@ public class Config extends ConfigBase {
     public static boolean enable_commit_lock_for_all_tables = true;
 
     @ConfField(mutable = true, description = {
-            "Whether to enable lazy commit for large transactions in cloud mode. Default is false."})
-    public static boolean enable_cloud_txn_lazy_commit = false;
+            "Whether to enable lazy commit for large transactions in cloud mode. Default is true."})
+    public static boolean enable_cloud_txn_lazy_commit = true;
 
     @ConfField(mutable = true, masterOnly = true,
             description = {
@@ -3353,6 +3410,54 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = true)
     public static long mow_get_ms_lock_retry_backoff_interval = 80;
 
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Whether to enable TSO."}, varType = VariableAnnotation.EXPERIMENTAL)
+    public static boolean enable_tso_feature = false;
+
+    @ConfField(mutable = false, masterOnly = true, description = {
+            "TSO service update interval in milliseconds. Default is 50, which means the TSO service "
+                    + "will perform timestamp update checks every 50 milliseconds."})
+    public static int tso_service_update_interval_ms = 50;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "TSO service max retry count. Default is 3, which means the TSO service will retry 3 times "
+                    + "to update the global timestamp."})
+    public static int tso_max_update_retry_count = 3;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "TSO get max retry count. Default is 10, which means the TSO service will retry 10 times "
+                    + "to generate TSO."})
+    public static int tso_max_get_retry_count = 10;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "TSO service time window in milliseconds. Default is 5000, which means the TSO service "
+                    + "will apply for a TSO time window of 5000ms from BDBJE once."})
+    public static int tso_service_window_duration_ms = 5000;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Max tolerated clock backward threshold during TSO calibration in milliseconds. "
+                    + "Exceeding this threshold will fail enabling TSO. Default is 30 minutes."})
+    public static long tso_clock_backward_startup_threshold_ms = 30L * 60 * 1000;
+
+    @ConfField(mutable = true, description = {
+            "TSO service time offset in milliseconds. Only for test. Default is 0, which means the TSO service "
+                    + "timestamp offset is 0 milliseconds."})
+    public static int tso_time_offset_debug_mode = 0;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Whether to enable persisting TSO window end into edit log. Enabling emits new op code, "
+                    + "which may break rollback to older versions."})
+    public static boolean enable_tso_persist_journal = false;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Whether to include TSO info as an image module in checkpoint. Older versions may need to ignore "
+                    + "unknown modules when reading new images."})
+    public static boolean enable_tso_checkpoint_module = false;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "Whether to forward TSO 1ms when logical counter is nearly full. Default is true."})
+    public static boolean enable_tso_forward_when_counter_full = true;
+
     @ConfField(mutable = true, masterOnly = true)
     public static boolean enable_notify_be_after_load_txn_commit = false;
 
@@ -3384,14 +3489,26 @@ public class Config extends ConfigBase {
                     + "detailed information of all replicas of the tablet will be printed."})
     public static boolean sql_block_rule_ignore_admin = false;
 
-    @ConfField(description = {"Authentication plugin directory."})
+    @ConfField(description = {"Authentication plugin root directories. Use a comma-separated list to configure "
+            + "multiple roots."})
     public static String authentication_plugins_dir = EnvUtils.getDorisHome() + "/plugins/authentication";
 
-    @ConfField(description = {"Authorization plugin directory."})
+    @ConfField(description = {"Authorization plugin root directories. Use a comma-separated list to configure "
+            + "multiple roots."})
     public static String authorization_plugins_dir = EnvUtils.getDorisHome() + "/plugins/authorization";
 
     @ConfField(description = {"Security plugin directory."})
     public static String security_plugins_dir = EnvUtils.getDorisHome() + "/plugins/security";
+
+    @ConfField(description = {"Directory containing filesystem provider plugin subdirectories. "
+            + "Each subdirectory is one storage backend (e.g., s3/, hdfs/, azure/). "
+            + "If empty, only classpath-based built-in providers are used (test/dev mode)."})
+    public static String filesystem_plugin_root = EnvUtils.getDorisHome() + "/plugins/filesystem";
+
+    @ConfField(description = {"Directory containing connector provider plugin subdirectories. "
+            + "Each subdirectory is one connector (e.g., es/, jdbc/, iceberg/). "
+            + "If empty, only classpath-based built-in providers are used (test/dev mode)."})
+    public static String connector_plugin_root = EnvUtils.getDorisHome() + "/plugins/connector";
 
     @ConfField(description = {"Authorization plugin configuration file path. Must be under DORIS_HOME. "
             + "Default is conf/authorization.conf."})
@@ -3456,6 +3573,16 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, description = {
             "The maximum length of the first row error message when data quality error occurs, default is 256 bytes"})
     public static int first_error_msg_max_length = 256;
+
+    @ConfField(mutable = false, description = {
+        "Whether to enable file cache admission control(Blocklist and Allowlist)"
+    })
+    public static boolean enable_file_cache_admission_control = false;
+
+    @ConfField(mutable = false, description = {
+        "Directory path for storing admission rules JSON files"
+    })
+    public static String file_cache_admission_control_json_dir = "";
 
     @ConfField
     public static String cloud_snapshot_handler_class = "org.apache.doris.cloud.snapshot.CloudSnapshotHandler";

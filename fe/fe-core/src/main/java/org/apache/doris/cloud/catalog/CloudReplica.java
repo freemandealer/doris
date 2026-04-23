@@ -59,19 +59,16 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     private ConcurrentHashMap<String, List<Long>> primaryClusterToBackends = null;
     @SerializedName(value = "be")
     private ConcurrentHashMap<String, Long> primaryClusterToBackend = new ConcurrentHashMap<>();
-    @SerializedName(value = "dbId")
-    private long dbId = -1;
     @SerializedName(value = "tableId")
     private long tableId = -1;
     @SerializedName(value = "partitionId")
     private long partitionId = -1;
-    @SerializedName(value = "indexId")
-    private long indexId = -1;
     @SerializedName(value = "idx")
     private long idx = -1;
     // last time to get tablet stats
     @Getter
     @Setter
+    @SerializedName(value = "gst")
     long lastGetTabletStatsTime = 0;
     /**
      * The index of {@link org.apache.doris.catalog.CloudTabletStatMgr#DEFAULT_INTERVAL_LADDER_MS} array.
@@ -82,14 +79,10 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
      */
     @Getter
     @Setter
+    @SerializedName(value = "sii")
     int statsIntervalIndex = 0;
 
-    private long segmentCount = 0L;
-    private long rowsetCount = 1L; // [0-1] rowset
-
     private static final Random rand = new Random();
-
-    private Map<String, List<Long>> memClusterToBackends = null;
 
     // clusterId, secondaryBe, changeTimestamp
     private Map<String, Pair<Long, Long>> secondaryClusterToBackends
@@ -108,10 +101,8 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     public CloudReplica(long replicaId, Long backendId, ReplicaState state, long version, int schemaHash,
             long dbId, long tableId, long partitionId, long indexId, long idx) {
         super(replicaId, -1, state, version, schemaHash);
-        this.dbId = dbId;
         this.tableId = tableId;
         this.partitionId = partitionId;
-        this.indexId = indexId;
         this.idx = idx;
     }
 
@@ -321,30 +312,6 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
 
         if (Config.enable_cloud_multi_replica) {
             int indexRand = rand.nextInt(Config.cloud_replica_num);
-            int coldReadRand = rand.nextInt(100);
-            boolean allowColdRead = coldReadRand < Config.cloud_cold_read_percent;
-            initMemClusterToBackends();
-            boolean replicaEnough = memClusterToBackends.get(clusterId) != null
-                    && memClusterToBackends.get(clusterId).size() > indexRand;
-
-            long backendId = -1;
-            if (replicaEnough) {
-                backendId = memClusterToBackends.get(clusterId).get(indexRand);
-            }
-
-            if (!replicaEnough && !allowColdRead && primaryClusterToBackend.containsKey(clusterId)) {
-                backendId = primaryClusterToBackend.get(clusterId);
-            }
-
-            if (backendId > 0) {
-                Backend be = Env.getCurrentSystemInfo().getBackend(backendId);
-                if (be != null && be.isQueryAvailable()) {
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug("backendId={} ", backendId);
-                    }
-                    return backendId;
-                }
-            }
 
             List<Long> res = hashReplicaToBes(clusterId, false, Config.cloud_replica_num);
             if (res.size() < indexRand + 1) {
@@ -483,17 +450,6 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
         return (hashValue % beNum + beNum) % beNum;
     }
 
-    private void initMemClusterToBackends() {
-        // the enable_cloud_multi_replica is not used now
-        if (memClusterToBackends == null) {
-            synchronized (this) {
-                if (memClusterToBackends == null) {
-                    memClusterToBackends = new ConcurrentHashMap<>();
-                }
-            }
-        }
-    }
-
     private List<Long> hashReplicaToBes(String clusterId, boolean isBackGround, int replicaNum)
             throws ComputeGroupException {
         // TODO(luwei) list should be sorted
@@ -553,11 +509,8 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
             LOG.info("picked beId {}, replicaId {}, partId {}, beNum {}, replicaIdx {}, picked Index {}, hashVal {}",
                     pickedBeId, getId(), partitionId, availableBes.size(), idx, index,
                     hashCode == null ? -1 : hashCode.asLong());
-            // save to memClusterToBackends map
             bes.add(pickedBeId);
         }
-
-        memClusterToBackends.put(clusterId, bes);
 
         return bes;
     }
@@ -570,20 +523,12 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
         return true;
     }
 
-    public long getDbId() {
-        return dbId;
-    }
-
     public long getTableId() {
         return tableId;
     }
 
     public long getPartitionId() {
         return partitionId;
-    }
-
-    public long getIndexId() {
-        return indexId;
     }
 
     public long getIdx() {
@@ -642,26 +587,6 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
             }
         });
         return result;
-    }
-
-    @Override
-    public long getSegmentCount() {
-        return segmentCount;
-    }
-
-    @Override
-    public void setSegmentCount(long segmentCount) {
-        this.segmentCount = segmentCount;
-    }
-
-    @Override
-    public long getRowsetCount() {
-        return rowsetCount;
-    }
-
-    @Override
-    public void setRowsetCount(long rowsetCount) {
-        this.rowsetCount = rowsetCount;
     }
 
     @Override

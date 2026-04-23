@@ -418,7 +418,7 @@ struct TQueryOptions {
   179: optional bool enable_parquet_filter_by_bloom_filter = true;
   180: optional i32 max_file_scanners_concurrency = 0;
   181: optional i32 min_file_scanners_concurrency = 0;
-  182: optional i32 ivf_nprobe = 1;
+  182: optional i32 ivf_nprobe = 32;
   // Enable hybrid sorting: dynamically selects between PdqSort and TimSort based on 
   // runtime profiling to choose the most efficient algorithm for the data pattern
   183: optional bool enable_use_hybrid_sort = false;
@@ -439,7 +439,6 @@ struct TQueryOptions {
   200: optional bool enable_adjust_conjunct_order_by_cost;
   // Use paimon-cpp to read Paimon splits on BE
   201: optional bool enable_paimon_cpp_reader = false;
-
 
   // Whether all fragments of this query are assigned to a single backend.
   // When true, the streaming aggregation operator can use more aggressive
@@ -473,6 +472,16 @@ struct TQueryOptions {
   209: optional i32 spill_repartition_max_depth = 8
 
 
+  210: optional double max_scan_mem_ratio = 0.3;
+  211: optional bool enable_adaptive_scan = false;
+  212: optional bool enable_local_exchange_before_agg = true;
+
+  213: optional i64 file_presigned_url_ttl_seconds = 3600;
+  214: optional i32 embed_max_batch_size = 5;
+  215: optional i64 ai_context_window_size = 131072;
+
+  // Use Rust-based Lance reader for FORMAT_LANCE scan ranges
+  216: optional bool enable_rust_lance_reader = false;
   // For cloud, to control if the content would be written into file cache
   // In write path, to control if the content would be written into file cache.
   // In read path, read from file cache or remote storage when execute query.
